@@ -69,6 +69,14 @@ export function rotation(axis: Vec3, angle: number): Mat4 {
   return m;
 }
 
+export function scale(v: Vec3): Mat4 {
+  const m = identity();
+  m[0] = v.x;
+  m[5] = v.y;
+  m[10] = v.z;
+  return m;
+}
+
 export const rotationAxisX = (angle: number) => rotation({ x: 1, y: 0, z: 0 }, angle);
 export const rotationAxisY = (angle: number) => rotation({ x: 0, y: 1, z: 0 }, angle);
 export const rotationAxisZ = (angle: number) => rotation({ x: 0, y: 0, z: 1 }, angle);

@@ -3,8 +3,9 @@ import * as math from "./math";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const ui = {
-  tx: document.getElementById("tr-x") as HTMLInputElement,
-  ty: document.getElementById("tr-y") as HTMLInputElement,
+  sx: document.getElementById("sr-x") as HTMLInputElement,
+  sy: document.getElementById("sr-y") as HTMLInputElement,
+  sz: document.getElementById("sr-z") as HTMLInputElement,
   tz: document.getElementById("tr-z") as HTMLInputElement,
   rot: document.getElementById("rot") as HTMLInputElement,
   spin: document.getElementById("spin") as HTMLInputElement,
@@ -78,13 +79,17 @@ async function main() {
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
 
-  const hx = 0.5,
-    hy = 0.5,
-    hz = 0.5;
+  const cubeScale: Vec3 = {
+    x: 0.5,
+    y: 0.5,
+    z: 0.5,
+  };
+
+  const { x: hx, y: hy, z: hz } = cubeScale;
 
   // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy) для плоского освещения (дублируем вершины по граням)
   // biome-ignore format: ignore
-  const vertices = new Float32Array([
+  const baseVertices = new Float32Array([
     // front (z+)
     -hx,-hy, hz,  0,0,1,  0,0,
      hx,-hy, hz,  0,0,1,  1,0,
@@ -129,11 +134,11 @@ async function main() {
   ]);
 
   const vbo = gpu.createBuffer({
-    size: vertices.byteLength,
+    size: baseVertices.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: false,
   });
-  gpu.queue.writeBuffer(vbo, 0, vertices);
+  gpu.queue.writeBuffer(vbo, 0, baseVertices);
 
   const ibo = gpu.createBuffer({
     size: indices.byteLength,
@@ -236,23 +241,47 @@ async function main() {
     ui.rot.value = spin ? t.toString() : ui.rot.value;
     const rotation = spin ? t : parseFloat(ui.rot.value);
 
-    const pos: Vec3 = {
-      x: parseFloat(ui.tx.value),
-      y: parseFloat(ui.ty.value),
-      z: parseFloat(ui.tz.value),
+    const scaleVec = {
+      x: parseFloat(ui.sx.value),
+      y: parseFloat(ui.sy.value),
+      z: parseFloat(ui.sz.value),
     };
-    const color = hexToRgb01(ui.color.value);
+    const pos: Vec3 = { x: 0, y: 0, z: parseFloat(ui.tz.value) };
 
+    // Готовим буфер вершин с масштабированными позициями
+    const scaled = new Float32Array(baseVertices.length);
+    for (let i = 0; i < baseVertices.length; i += 8) {
+      // pos = [i+0..i+2], normal = [i+3..i+5], uv = [i+6..i+7]
+      scaled[i + 0] = baseVertices[i + 0] * scaleVec.x;
+      scaled[i + 1] = baseVertices[i + 1] * scaleVec.y;
+      scaled[i + 2] = baseVertices[i + 2] * scaleVec.z;
+
+      scaled[i + 3] = baseVertices[i + 3];
+      scaled[i + 4] = baseVertices[i + 4];
+      scaled[i + 5] = baseVertices[i + 5];
+
+      scaled[i + 6] = baseVertices[i + 6];
+      scaled[i + 7] = baseVertices[i + 7];
+    }
+
+    // Перезаписываем буфер вершин
+    gpu.queue.writeBuffer(vbo, 0, scaled);
+
+    // transform без масштаба: меняем только ориентацию и положение
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
     const rot = math.multiply(math.rotationAxisY(rotation), math.rotationAxisX(-Math.PI / 7));
     const trans = math.translation(pos);
     const transform = math.multiply(rot, trans);
 
-    // pack uniforms
+    const color = hexToRgb01(ui.color.value);
+
+    // Готовим буфер uniforms
     const data = new Float32Array(uniformSize / 4);
     data.set(proj, 0);
     data.set(transform, 16);
     data.set(color, 32);
+
+    // Перезаписываем буфер uniforms
     gpu.queue.writeBuffer(ubo, 0, data);
 
     const colorTex = context.getCurrentTexture();

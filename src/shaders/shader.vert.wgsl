@@ -23,14 +23,30 @@ struct VSOut {
 fn main(input : VSIn) -> VSOut {
   var out : VSOut;
   let point = vec4<f32>(input.position, 1.0);
-  let transformed = ubo.transform * point;
-  let projected  = ubo.projection * transformed;
-  // Трансформируем нормаль матрицей модели без переноса (w=0)
-  let worldNormal = normalize( (ubo.transform * vec4<f32>(input.normal, 0.0)).xyz );
-  out.position = projected;
-  out.normal = worldNormal;
+  let worldPos = ubo.transform * point;
+  out.position = ubo.projection * worldPos;
+
+  // Извлекаем столбцы M3 = R * S из ubo.transform
+  let c0 = ubo.transform[0].xyz; // столбец X
+  let c1 = ubo.transform[1].xyz; // столбец Y
+  let c2 = ubo.transform[2].xyz; // столбец Z
+
+  // Длины столбцов — масштабы по осям
+  let sx = max(length(c0), 1e-8);
+  let sy = max(length(c1), 1e-8);
+  let sz = max(length(c2), 1e-8);
+
+  // Ортонормированные столбцы — чистое вращение R
+  let r0 = c0 / sx;
+  let r1 = c1 / sy;
+  let r2 = c2 / sz;
+  let R  = mat3x3<f32>(r0, r1, r2);
+
+  // Преобразуем нормаль: N' = normalize( R * (N / S) )
+  let Nobj = input.normal / vec3<f32>(sx, sy, sz);
+  out.normal = normalize(R * Nobj);
+
   out.uv = input.uv;
   return out;
 }
-
 

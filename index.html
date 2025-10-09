@@ -14,9 +14,10 @@
       <form id="ui" style="display:flex;flex-direction:column;gap:10px;min-width:260px;">
         <fieldset>
           <legend>Controls</legend>
-          <label>Translation X <input id="tr-x" type="range" min="-10" max="10" step="0.1" value="0"></label>
-          <label>Translation Y <input id="tr-y" type="range" min="-10" max="10" step="0.1" value="0"></label>
-          <label>Translation Z <input id="tr-z" type="range" min="0" max="20" step="0.1" value="2.5"></label>
+          <label>Scale X <input id="sr-x" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>---Scale Y <input id="sr-y" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>---Scale Z <input id="sr-z" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>Translation Z <input id="tr-z" type="range" min="0" max="20" step="0.01" value="2.5"></label>
           <label>Rotation <input id="rot" type="range" min="0" max="6.283185307179586" step="0.01" value="2.5"></label>
           <label><input id="spin" type="checkbox"> Spin?</label>
           <label>Color <input id="color" type="color" value="#80ffb3"></label>
