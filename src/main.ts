@@ -9,7 +9,7 @@ const ui = {
   tz: document.getElementById("tr-z") as HTMLInputElement,
   rot: document.getElementById("rot") as HTMLInputElement,
   spin: document.getElementById("spin") as HTMLInputElement,
-  color: document.getElementById("color") as HTMLInputElement,
+  reset: document.getElementById("reset") as HTMLButtonElement,
 };
 
 function hexToRgb01(hex: string): [number, number, number] {
@@ -233,6 +233,15 @@ async function main() {
 
   ui.spin.addEventListener("change", toggleSpin);
 
+  function resetUI() {
+    ui.sx.value = "0.5";
+    ui.sy.value = "0.5";
+    ui.sz.value = "0.5";
+    ui.tz.value = "1.5";
+  }
+
+  ui.reset.addEventListener("click", resetUI);
+
   function frame() {
     const now = performance.now();
     const t = (startAngle + (now - start) / spinSpeed) % (Math.PI * 2);
@@ -273,7 +282,7 @@ async function main() {
     const trans = math.translation(pos);
     const transform = math.multiply(rot, trans);
 
-    const color = hexToRgb01(ui.color.value);
+    const color = hexToRgb01("#ffffff");
 
     // Готовим буфер uniforms
     const data = new Float32Array(uniformSize / 4);
