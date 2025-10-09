@@ -28,13 +28,12 @@ canvas {
   box-shadow: 0 0 16px rgba(0, 0, 0, 0.2);
   position: fixed;
   top: 0;
-  left: 50%;
-  translate: -50%;
+  right: 0;
   width: 300px;
   height: auto;
   z-index: 100;
   padding: 12px 16px 16px 16px;
-  margin-top: 20px;
+  margin: 20px 20px 0 0;
   border-radius: 12px;
 
   fieldset {

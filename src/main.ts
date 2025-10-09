@@ -9,6 +9,7 @@ const ui = {
   tz: document.getElementById("tr-z") as HTMLInputElement,
   rot: document.getElementById("rot") as HTMLInputElement,
   spin: document.getElementById("spin") as HTMLInputElement,
+  pulse: document.getElementById("pulse") as HTMLInputElement,
   reset: document.getElementById("reset") as HTMLButtonElement,
 };
 
@@ -79,13 +80,13 @@ async function main() {
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
 
-  const cubeScale: Vec3 = {
+  const cubePoint: Vec3 = {
     x: 0.5,
     y: 0.5,
     z: 0.5,
   };
 
-  const { x: hx, y: hy, z: hz } = cubeScale;
+  const { x: hx, y: hy, z: hz } = cubePoint;
 
   // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy) для плоского освещения (дублируем вершины по граням)
   // biome-ignore format: ignore
@@ -250,9 +251,11 @@ async function main() {
     ui.rot.value = spin ? t.toString() : ui.rot.value;
     const rotation = spin ? t : parseFloat(ui.rot.value);
 
+    const baseScaleY = parseFloat(ui.sy.value);
+    const pulse = ui.pulse.checked ? 1 + 0.2 * Math.sin(t * 5.0) : 1;
     const scaleVec = {
       x: parseFloat(ui.sx.value),
-      y: parseFloat(ui.sy.value),
+      y: baseScaleY * pulse,
       z: parseFloat(ui.sz.value),
     };
     const pos: Vec3 = { x: 0, y: 0, z: parseFloat(ui.tz.value) };
