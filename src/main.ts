@@ -46,43 +46,79 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  const hx = 0.5, hy = 0.5, hz = 0.5;
+  async function loadTexture(gpu: GPUDevice, url: string) {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const bmp = await createImageBitmap(img, { imageOrientation: "flipY" }); // flipY для UV
+    const texture = gpu.createTexture({
+      size: { width: bmp.width, height: bmp.height },
+      format: "rgba8unorm",
+      usage:
+        GPUTextureUsage.TEXTURE_BINDING |
+        GPUTextureUsage.COPY_DST |
+        GPUTextureUsage.RENDER_ATTACHMENT,
+    });
+    gpu.queue.copyExternalImageToTexture(
+      { source: bmp },
+      { texture },
+      { width: bmp.width, height: bmp.height },
+    );
+    const sampler = gpu.createSampler({
+      magFilter: "nearest",
+      minFilter: "nearest",
+      addressModeU: "repeat",
+      addressModeV: "repeat",
+    });
+    return { texture, sampler };
+  }
 
-  // Вершины: позиция (xyz) + нормаль (xyz) для плоского освещения (дублируем вершины по граням)
+  const { texture, sampler } = await loadTexture(
+    gpu,
+    new URL("../assets/cobblestone.png", import.meta.url).toString(),
+  );
+
+  const hx = 0.5,
+    hy = 0.5,
+    hz = 0.5;
+
+  // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy) для плоского освещения (дублируем вершины по граням)
+  // biome-ignore format: ignore
   const vertices = new Float32Array([
     // front (z+)
-    -hx,-hy, hz,   0, 0, 1,
-     hx,-hy, hz,   0, 0, 1,
-     hx, hy, hz,   0, 0, 1,
-    -hx, hy, hz,   0, 0, 1,
+    -hx,-hy, hz,  0,0,1,  0,0,
+     hx,-hy, hz,  0,0,1,  1,0,
+     hx, hy, hz,  0,0,1,  1,1,
+    -hx, hy, hz,  0,0,1,  0,1,
     // back (z-)
-    -hx,-hy,-hz,   0, 0,-1,
-     hx,-hy,-hz,   0, 0,-1,
-     hx, hy,-hz,   0, 0,-1,
-    -hx, hy,-hz,   0, 0,-1,
+    -hx,-hy,-hz,  0,0,-1, 1,0,
+     hx,-hy,-hz,  0,0,-1, 0,0,
+     hx, hy,-hz,  0,0,-1, 0,1,
+    -hx, hy,-hz,  0,0,-1, 1,1,
     // left (x-)
-    -hx,-hy,-hz,  -1, 0, 0,
-    -hx,-hy, hz,  -1, 0, 0,
-    -hx, hy, hz,  -1, 0, 0,
-    -hx, hy,-hz,  -1, 0, 0,
+    -hx,-hy,-hz, -1,0,0,  0,0,
+    -hx,-hy, hz, -1,0,0,  1,0,
+    -hx, hy, hz, -1,0,0,  1,1,
+    -hx, hy,-hz, -1,0,0,  0,1,
     // right (x+)
-     hx,-hy,-hz,   1, 0, 0,
-     hx,-hy, hz,   1, 0, 0,
-     hx, hy, hz,   1, 0, 0,
-     hx, hy,-hz,   1, 0, 0,
+     hx,-hy,-hz,  1,0,0,  1,0,
+     hx,-hy, hz,  1,0,0,  0,0,
+     hx, hy, hz,  1,0,0,  0,1,
+     hx, hy,-hz,  1,0,0,  1,1,
     // top (y+)
-    -hx, hy,-hz,   0, 1, 0,
-    -hx, hy, hz,   0, 1, 0,
-     hx, hy, hz,   0, 1, 0,
-     hx, hy,-hz,   0, 1, 0,
+    -hx, hy,-hz,  0,1,0,  0,1,
+    -hx, hy, hz,  0,1,0,  0,0,
+     hx, hy, hz,  0,1,0,  1,0,
+     hx, hy,-hz,  0,1,0,  1,1,
     // bottom (y-)
-    -hx,-hy,-hz,   0,-1, 0,
-    -hx,-hy, hz,   0,-1, 0,
-     hx,-hy, hz,   0,-1, 0,
-     hx,-hy,-hz,   0,-1, 0,
+    -hx,-hy,-hz,  0,-1,0, 0,0,
+    -hx,-hy, hz,  0,-1,0, 0,1,
+     hx,-hy, hz,  0,-1,0, 1,1,
+     hx,-hy,-hz,  0,-1,0, 1,0,
   ]);
 
   // Индексы: по 2 треугольника на грань
+  // biome-ignore format: ignore
   const indices = new Uint32Array([
     0, 1, 2,  2, 3, 0,      // front
     4, 5, 6,  6, 7, 4,      // back
@@ -116,11 +152,17 @@ async function main() {
   const bindGroupLayout = gpu.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
     ],
   });
   const bindGroup = gpu.createBindGroup({
     layout: bindGroupLayout,
-    entries: [{ binding: 0, resource: { buffer: ubo } }],
+    entries: [
+      { binding: 0, resource: { buffer: ubo } },
+      { binding: 1, resource: texture.createView() },
+      { binding: 2, resource: sampler },
+    ],
   });
 
   const pipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
@@ -135,7 +177,7 @@ async function main() {
       entryPoint: "main",
       buffers: [
         {
-          arrayStride: 24,
+          arrayStride: 32,
           attributes: [
             {
               shaderLocation: 0,
@@ -147,6 +189,11 @@ async function main() {
               offset: 12,
               format: "float32x3",
             }, // normal
+            {
+              shaderLocation: 2,
+              offset: 24,
+              format: "float32x2",
+            }, // uv
           ],
         },
       ],
@@ -197,7 +244,7 @@ async function main() {
     const color = hexToRgb01(ui.color.value);
 
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
-    const rot = math.multiply(math.rotationAxisY(rotation), math.rotationAxisX(-Math.PI / 8));
+    const rot = math.multiply(math.rotationAxisY(rotation), math.rotationAxisX(-Math.PI / 7));
     const trans = math.translation(pos);
     const transform = math.multiply(rot, trans);
 

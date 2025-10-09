@@ -10,11 +10,13 @@ struct ShaderConstants {
 struct VSIn {
   @location(0) position : vec3<f32>,
   @location(1) normal   : vec3<f32>,
+  @location(2) uv       : vec2<f32>,
 };
 
 struct VSOut {
   @builtin(position) position : vec4<f32>,
   @location(0) normal        : vec3<f32>,
+  @location(1) uv            : vec2<f32>,
 };
 
 @vertex
@@ -27,6 +29,7 @@ fn main(input : VSIn) -> VSOut {
   let worldNormal = normalize( (ubo.transform * vec4<f32>(input.normal, 0.0)).xyz );
   out.position = projected;
   out.normal = worldNormal;
+  out.uv = input.uv;
   return out;
 }
 
