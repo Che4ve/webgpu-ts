@@ -91,7 +91,16 @@ async function main() {
       module: gpu.createShaderModule({ code: vertWGSL }),
       entryPoint: "main",
       buffers: [
-        { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] },
+        {
+          arrayStride: 12,
+          attributes: [
+            {
+              shaderLocation: 0,
+              offset: 0,
+              format: "float32x3",
+            },
+          ],
+        },
       ],
     },
     fragment: {
@@ -99,18 +108,40 @@ async function main() {
       entryPoint: "main",
       targets: [{ format }],
     },
-    primitive: { topology: "triangle-list", cullMode: "back", frontFace: "cw" },
-    depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less-equal" },
+    primitive: {
+      topology: "triangle-list",
+      cullMode: "back",
+      frontFace: "cw",
+    },
+    depthStencil: {
+      format: "depth24plus",
+      depthWriteEnabled: true,
+      depthCompare: "less-equal",
+    },
   });
 
-  const start = performance.now();
+  let start = performance.now();
+  let startAngle = 0;
+  const spinSpeed = 700;
+
+  function toggleSpin(e: Event) {
+    if ((e.target as HTMLInputElement).checked) {
+      start = performance.now();
+      startAngle = parseFloat(ui.rot.value);
+      console.log(startAngle);
+    }
+  }
+
+  ui.spin.addEventListener("change", toggleSpin);
 
   function frame() {
     const now = performance.now();
-    const t = (now - start) / 1000;
+    const t = (startAngle + (now - start) / spinSpeed) % (Math.PI * 2);
 
     const spin = ui.spin.checked;
+    ui.rot.value = spin ? t.toString() : ui.rot.value;
     const rotation = spin ? t : parseFloat(ui.rot.value);
+
     const pos: Vec3 = {
       x: parseFloat(ui.tx.value),
       y: parseFloat(ui.ty.value),
