@@ -1,5 +1,5 @@
 import type { Vec3 } from "./math";
-import { projection, rotationAxisY, translation, multiply } from "./math";
+import * as math from "./math";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const ui = {
@@ -46,8 +46,51 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  const vertices = new Float32Array([-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0]);
-  const indices = new Uint32Array([0, 1, 2, 2, 3, 0]);
+  const hx = 0.5, hy = 0.5, hz = 0.5;
+
+  // Вершины: позиция (xyz) + нормаль (xyz) для плоского освещения (дублируем вершины по граням)
+  const vertices = new Float32Array([
+    // front (z+)
+    -hx,-hy, hz,   0, 0, 1,
+     hx,-hy, hz,   0, 0, 1,
+     hx, hy, hz,   0, 0, 1,
+    -hx, hy, hz,   0, 0, 1,
+    // back (z-)
+    -hx,-hy,-hz,   0, 0,-1,
+     hx,-hy,-hz,   0, 0,-1,
+     hx, hy,-hz,   0, 0,-1,
+    -hx, hy,-hz,   0, 0,-1,
+    // left (x-)
+    -hx,-hy,-hz,  -1, 0, 0,
+    -hx,-hy, hz,  -1, 0, 0,
+    -hx, hy, hz,  -1, 0, 0,
+    -hx, hy,-hz,  -1, 0, 0,
+    // right (x+)
+     hx,-hy,-hz,   1, 0, 0,
+     hx,-hy, hz,   1, 0, 0,
+     hx, hy, hz,   1, 0, 0,
+     hx, hy,-hz,   1, 0, 0,
+    // top (y+)
+    -hx, hy,-hz,   0, 1, 0,
+    -hx, hy, hz,   0, 1, 0,
+     hx, hy, hz,   0, 1, 0,
+     hx, hy,-hz,   0, 1, 0,
+    // bottom (y-)
+    -hx,-hy,-hz,   0,-1, 0,
+    -hx,-hy, hz,   0,-1, 0,
+     hx,-hy, hz,   0,-1, 0,
+     hx,-hy,-hz,   0,-1, 0,
+  ]);
+
+  // Индексы: по 2 треугольника на грань
+  const indices = new Uint32Array([
+    0, 1, 2,  2, 3, 0,      // front
+    4, 5, 6,  6, 7, 4,      // back
+    8, 9,10, 10,11, 8,      // left
+   12,13,14, 14,15,12,      // right
+   16,17,18, 18,19,16,      // top
+   20,21,22, 22,23,20,      // bottom
+  ]);
 
   const vbo = gpu.createBuffer({
     size: vertices.byteLength,
@@ -92,13 +135,18 @@ async function main() {
       entryPoint: "main",
       buffers: [
         {
-          arrayStride: 12,
+          arrayStride: 24,
           attributes: [
             {
               shaderLocation: 0,
               offset: 0,
               format: "float32x3",
-            },
+            }, // position
+            {
+              shaderLocation: 1,
+              offset: 12,
+              format: "float32x3",
+            }, // normal
           ],
         },
       ],
@@ -110,7 +158,7 @@ async function main() {
     },
     primitive: {
       topology: "triangle-list",
-      cullMode: "back",
+      cullMode: "none",
       frontFace: "cw",
     },
     depthStencil: {
@@ -128,7 +176,6 @@ async function main() {
     if ((e.target as HTMLInputElement).checked) {
       start = performance.now();
       startAngle = parseFloat(ui.rot.value);
-      console.log(startAngle);
     }
   }
 
@@ -149,10 +196,10 @@ async function main() {
     };
     const color = hexToRgb01(ui.color.value);
 
-    const proj = projection(70, canvas.width / canvas.height, 0.01, 100);
-    const rot = rotationAxisY(rotation);
-    const trans = translation(pos);
-    const transform = multiply(rot, trans);
+    const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
+    const rot = math.multiply(math.rotationAxisY(rotation), math.rotationAxisX(-Math.PI / 8));
+    const trans = math.translation(pos);
+    const transform = math.multiply(rot, trans);
 
     // pack uniforms
     const data = new Float32Array(uniformSize / 4);
@@ -166,7 +213,17 @@ async function main() {
     const encoder = gpu.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
-        { view, clearValue: { r: 0.1, g: 0.1, b: 0.1, a: 1 }, loadOp: "clear", storeOp: "store" },
+        {
+          view,
+          clearValue: {
+            r: 0.1,
+            g: 0.1,
+            b: 0.1,
+            a: 1,
+          },
+          loadOp: "clear",
+          storeOp: "store",
+        },
       ],
       depthStencilAttachment: {
         view: depthView,
@@ -180,7 +237,7 @@ async function main() {
     pass.setVertexBuffer(0, vbo);
     pass.setIndexBuffer(ibo, "uint32");
     pass.setBindGroup(0, bindGroup);
-    pass.drawIndexed(6);
+    pass.drawIndexed(indices.length);
     pass.end();
 
     gpu.queue.submit([encoder.finish()]);

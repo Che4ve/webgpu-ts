@@ -1,5 +1,4 @@
-export type Mat4 = Float32Array; // column-major 4x4
-export type Vec3 = { x: number; y: number; z: number };
+import type { Mat4, Vec3 } from "./types";
 
 export function identity(): Mat4 {
   const m = new Float32Array(16);
@@ -70,4 +69,6 @@ export function rotation(axis: Vec3, angle: number): Mat4 {
   return m;
 }
 
+export const rotationAxisX = (angle: number) => rotation({ x: 1, y: 0, z: 0 }, angle);
 export const rotationAxisY = (angle: number) => rotation({ x: 0, y: 1, z: 0 }, angle);
+export const rotationAxisZ = (angle: number) => rotation({ x: 0, y: 0, z: 1 }, angle);
