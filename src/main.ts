@@ -50,56 +50,49 @@ async function main() {
 	});
 	const depthView = depthTex.createView();
 
-	// Октаэдр: 6 вершин (вершины по осям координат)
-	// biome-ignore format: ignore
-	const vertices = new Float32Array([
-		0,
-		1,
-		0, // 0: top
-		1,
-		0,
-		0, // 1: right
-		0,
-		0,
-		1, // 2: front
-		-1,
-		0,
-		0, // 3: left
-		0,
-		0,
-		-1, // 4: back
-		0,
-		-1,
-		0, // 5: bottom
-	]);
-	// 8 треугольников (верхние 4 + нижние 4)
-	// biome-ignore format: ignore
-	const indices = new Uint32Array([
-		0,
-		2,
-		1,
-		0,
-		1,
-		4,
-		0,
-		4,
-		3,
-		0,
-		3,
-		2, // верхние грани
-		5,
-		1,
-		2,
-		5,
-		4,
-		1,
-		5,
-		3,
-		4,
-		5,
-		2,
-		3, // нижние грани
-	]);
+	// Октаэдр: дублируем вершины по граням для плоского освещения
+	// Формат: позиция(x,y,z) + нормаль(nx,ny,nz)
+	const top = [0, 1, 0];
+	const right = [1, 0, 0];
+	const front = [0, 0, 1];
+	const left = [-1, 0, 0];
+	const back = [0, 0, -1];
+	const bottom = [0, -1, 0];
+
+	// Вычисляем нормали для каждой грани (кросс-произведение)
+	function normal(a: number[], b: number[], c: number[]): number[] {
+		const u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+		const v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+		const n = [
+			u[1] * v[2] - u[2] * v[1],
+			u[2] * v[0] - u[0] * v[2],
+			u[0] * v[1] - u[1] * v[0],
+		];
+		const len = Math.hypot(n[0], n[1], n[2]) || 1;
+		return [n[0] / len, n[1] / len, n[2] / len];
+	}
+
+	const faces = [
+		[top, front, right], // верхняя передняя правая
+		[top, right, back], // верхняя правая задняя
+		[top, back, left], // верхняя задняя левая
+		[top, left, front], // верхняя левая передняя
+		[bottom, right, front], // нижняя передняя правая
+		[bottom, back, right], // нижняя правая задняя
+		[bottom, left, back], // нижняя задняя левая
+		[bottom, front, left], // нижняя левая передняя
+	];
+
+	const vertexData: number[] = [];
+	for (const [a, b, c] of faces) {
+		const n = normal(a, b, c);
+		vertexData.push(...a, ...n);
+		vertexData.push(...b, ...n);
+		vertexData.push(...c, ...n);
+	}
+
+	const vertices = new Float32Array(vertexData);
+	const indices = new Uint32Array(Array.from({ length: 24 }, (_, i) => i)); // 0..23
 
 	const vbo = gpu.createBuffer({
 		size: vertices.byteLength,
@@ -150,8 +143,11 @@ async function main() {
 			entryPoint: "main",
 			buffers: [
 				{
-					arrayStride: 12,
-					attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }],
+					arrayStride: 24, // pos(12) + normal(12)
+					attributes: [
+						{ shaderLocation: 0, offset: 0, format: "float32x3" }, // position
+						{ shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
+					],
 				},
 			],
 		},
