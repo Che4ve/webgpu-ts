@@ -1,11 +1,36 @@
-struct ShaderConstants {
-  projection : mat4x4<f32>,
-  transform  : mat4x4<f32>,
-  color      : vec3<f32>,
-  _pad       : f32,
+struct Ambient {
+  color : vec3<f32>,
+  intensity : f32,
 };
 
-@group(0) @binding(0) var<uniform> ubo : ShaderConstants;
+struct Directional {
+  direction : vec3<f32>,
+  intensity : f32,
+  color : vec3<f32>,
+  _pad : f32,
+};
+
+struct Material {
+  albedo : vec3<f32>,
+  shininess : f32,
+  specular : vec3<f32>,
+  _pad : f32,
+};
+
+struct Scene {
+  projection : mat4x4<f32>,
+  view : mat4x4<f32>,
+  model : mat4x4<f32>,
+  cameraPos : vec3<f32>,
+  _padCam : f32,
+  ambient : Ambient,
+  directional : Directional,
+  material : Material,
+  pointLightCount : f32,
+  _padLights : vec3<f32>,
+};
+
+@group(0) @binding(0) var<uniform> scene : Scene;
 
 struct VSIn {
   @location(0) position : vec3<f32>,
@@ -15,21 +40,24 @@ struct VSIn {
 
 struct VSOut {
   @builtin(position) position : vec4<f32>,
-  @location(0) normal        : vec3<f32>,
-  @location(1) uv            : vec2<f32>,
+  @location(0) worldPos       : vec3<f32>,
+  @location(1) normal         : vec3<f32>,
+  @location(2) uv             : vec2<f32>,
 };
 
 @vertex
 fn main(input : VSIn) -> VSOut {
   var out : VSOut;
   let point = vec4<f32>(input.position, 1.0);
-  let worldPos = ubo.transform * point;
-  out.position = ubo.projection * worldPos;
+  let worldPos = scene.model * point;
+  let viewPos = scene.view * worldPos;
+  out.position = scene.projection * viewPos;
+  out.worldPos = worldPos.xyz;
 
-  // Извлекаем столбцы M3 = R * S из ubo.transform
-  let c0 = ubo.transform[0].xyz; // столбец X
-  let c1 = ubo.transform[1].xyz; // столбец Y
-  let c2 = ubo.transform[2].xyz; // столбец Z
+  // Извлекаем столбцы M3 = R * S из model
+  let c0 = scene.model[0].xyz; // столбец X
+  let c1 = scene.model[1].xyz; // столбец Y
+  let c2 = scene.model[2].xyz; // столбец Z
 
   // Длины столбцов — масштабы по осям
   let sx = max(length(c0), 1e-8);
@@ -49,4 +77,3 @@ fn main(input : VSIn) -> VSOut {
   out.uv = input.uv;
   return out;
 }
-

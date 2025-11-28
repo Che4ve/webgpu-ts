@@ -1,7 +1,24 @@
 import type { Vec3 } from "./math";
 import * as math from "./math";
 
+type PointLight = {
+  position: Vec3;
+  color: [number, number, number];
+  intensity: number;
+};
+
+type PointLightUI = {
+  color: HTMLInputElement;
+  intensity: HTMLInputElement;
+  x: HTMLInputElement;
+  y: HTMLInputElement;
+  z: HTMLInputElement;
+};
+
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
+const form = document.getElementById("controls-form") as HTMLFormElement;
+const maxPointLights = 4;
+
 const ui = {
   sx: document.getElementById("sr-x") as HTMLInputElement,
   sy: document.getElementById("sr-y") as HTMLInputElement,
@@ -11,21 +28,225 @@ const ui = {
   spin: document.getElementById("spin") as HTMLInputElement,
   pulse: document.getElementById("pulse") as HTMLInputElement,
   reset: document.getElementById("reset") as HTMLButtonElement,
+  ambientColor: document.getElementById("ambient-color") as HTMLInputElement,
+  ambientIntensity: document.getElementById("ambient-intensity") as HTMLInputElement,
+  dirYaw: document.getElementById("dir-yaw") as HTMLInputElement,
+  dirPitch: document.getElementById("dir-pitch") as HTMLInputElement,
+  dirColor: document.getElementById("dir-color") as HTMLInputElement,
+  dirIntensity: document.getElementById("dir-intensity") as HTMLInputElement,
+  matAlbedo: document.getElementById("mat-albedo") as HTMLInputElement,
+  matSpecular: document.getElementById("mat-specular") as HTMLInputElement,
+  matShininess: document.getElementById("mat-shininess") as HTMLInputElement,
+  pointCount: document.getElementById("point-count") as HTMLInputElement,
+  points: Array.from({ length: maxPointLights }, (_, i) => ({
+    color: document.getElementById(`p${i}-color`) as HTMLInputElement,
+    intensity: document.getElementById(`p${i}-intensity`) as HTMLInputElement,
+    x: document.getElementById(`p${i}-x`) as HTMLInputElement,
+    y: document.getElementById(`p${i}-y`) as HTMLInputElement,
+    z: document.getElementById(`p${i}-z`) as HTMLInputElement,
+  })) as PointLightUI[],
 };
+
+const pointLights: PointLight[] = new Array(maxPointLights).fill(null).map(() => ({
+  position: { x: 0, y: 1, z: 0 },
+  color: [1, 1, 1],
+  intensity: 1,
+}));
+
+const defaultUI = {
+  sx: ui.sx.value,
+  sy: ui.sy.value,
+  sz: ui.sz.value,
+  tz: ui.tz.value,
+  rot: ui.rot.value,
+  spin: ui.spin.checked,
+  pulse: ui.pulse.checked,
+  ambientColor: ui.ambientColor.value,
+  ambientIntensity: ui.ambientIntensity.value,
+  dirYaw: ui.dirYaw.value,
+  dirPitch: ui.dirPitch.value,
+  dirColor: ui.dirColor.value,
+  dirIntensity: ui.dirIntensity.value,
+  matAlbedo: ui.matAlbedo.value,
+  matSpecular: ui.matSpecular.value,
+  matShininess: ui.matShininess.value,
+  pointCount: ui.pointCount.value,
+  points: ui.points.map((p) => ({
+    color: p.color.value,
+    intensity: p.intensity.value,
+    x: p.x.value,
+    y: p.y.value,
+    z: p.z.value,
+  })),
+};
+
+const pressedKeys = new Set<string>();
+const moveSpeed = 3.5;
+const sprintScale = 1.75;
+const mouseSensitivity = 0.0025;
+
+const defaultCamera = { position: { x: 0, y: 1.2, z: -3.2 }, yaw: 0, pitch: 0 };
+const camera = {
+  position: { ...defaultCamera.position },
+  yaw: defaultCamera.yaw,
+  pitch: defaultCamera.pitch,
+};
+
+let spinOrigin = Number.parseFloat(ui.rot.value);
+let spinStart = performance.now();
+const spinSpeedMs = 700; // скорость вращения при Spin в мс/рад
 
 function hexToRgb01(hex: string): [number, number, number] {
   const v = hex.startsWith("#") ? hex.slice(1) : hex;
-  const n = parseInt(v, 16);
-  const r = (n >> 16) & 255,
-    g = (n >> 8) & 255,
-    b = n & 255;
+  const n = Number.parseInt(v, 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
   return [r / 255, g / 255, b / 255];
+}
+
+function directionFromAngles(yaw: number, pitch: number): Vec3 {
+  const cosPitch = Math.cos(pitch);
+  return math.normalize({
+    x: Math.sin(yaw) * cosPitch,
+    y: Math.sin(pitch),
+    z: Math.cos(yaw) * cosPitch,
+  });
+}
+
+const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
+
+window.addEventListener("keydown", (event) => {
+  pressedKeys.add(event.code);
+  if (
+    ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ControlLeft", "KeyQ", "KeyE"].includes(
+      event.code,
+    )
+  ) {
+    event.preventDefault();
+  }
+});
+window.addEventListener("keyup", (event) => pressedKeys.delete(event.code));
+
+canvas.addEventListener("click", () => {
+  if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
+});
+
+document.addEventListener("mousemove", (event) => {
+  if (document.pointerLockElement !== canvas) return;
+  camera.yaw += event.movementX * mouseSensitivity;
+  camera.pitch -= event.movementY * mouseSensitivity;
+  const limit = Math.PI / 2 - 0.05;
+  camera.pitch = clamp(camera.pitch, -limit, limit);
+});
+
+ui.spin.addEventListener("change", () => {
+  spinStart = performance.now();
+  spinOrigin = Number.parseFloat(ui.rot.value);
+});
+
+function resetUI() {
+  if (form instanceof HTMLFormElement && typeof form.reset === "function") {
+    form.reset();
+  } else {
+    ui.sx.value = defaultUI.sx;
+    ui.sy.value = defaultUI.sy;
+    ui.sz.value = defaultUI.sz;
+    ui.tz.value = defaultUI.tz;
+    ui.rot.value = defaultUI.rot;
+    ui.spin.checked = defaultUI.spin;
+    ui.pulse.checked = defaultUI.pulse;
+    ui.ambientColor.value = defaultUI.ambientColor;
+    ui.ambientIntensity.value = defaultUI.ambientIntensity;
+    ui.dirYaw.value = defaultUI.dirYaw;
+    ui.dirPitch.value = defaultUI.dirPitch;
+    ui.dirColor.value = defaultUI.dirColor;
+    ui.dirIntensity.value = defaultUI.dirIntensity;
+    ui.matAlbedo.value = defaultUI.matAlbedo;
+    ui.matSpecular.value = defaultUI.matSpecular;
+    ui.matShininess.value = defaultUI.matShininess;
+    ui.pointCount.value = defaultUI.pointCount;
+    defaultUI.points.forEach((p, idx) => {
+      const dst = ui.points[idx];
+      dst.color.value = p.color;
+      dst.intensity.value = p.intensity;
+      dst.x.value = p.x;
+      dst.y.value = p.y;
+      dst.z.value = p.z;
+    });
+  }
+  camera.position = { ...defaultCamera.position };
+  camera.yaw = defaultCamera.yaw;
+  camera.pitch = defaultCamera.pitch;
+  spinStart = performance.now();
+  spinOrigin = Number.parseFloat(ui.rot.value);
+}
+
+ui.reset.addEventListener("click", resetUI);
+
+function updateCamera(dt: number): Vec3 {
+  const forward = directionFromAngles(camera.yaw, camera.pitch);
+  const up: Vec3 = { x: 0, y: 1, z: 0 };
+  const right = math.normalize(math.cross(up, forward));
+
+  let move: Vec3 = { x: 0, y: 0, z: 0 };
+  if (pressedKeys.has("KeyW")) move = math.add(move, forward);
+  if (pressedKeys.has("KeyS")) move = math.sub(move, forward);
+  if (pressedKeys.has("KeyA")) move = math.sub(move, right);
+  if (pressedKeys.has("KeyD")) move = math.add(move, right);
+  if (pressedKeys.has("KeyE") || pressedKeys.has("Space")) move = math.add(move, up);
+  if (pressedKeys.has("KeyQ") || pressedKeys.has("ControlLeft")) move = math.sub(move, up);
+
+  const len = Math.hypot(move.x, move.y, move.z);
+  if (len > 0) {
+    const speed = moveSpeed * (pressedKeys.has("ShiftLeft") ? sprintScale : 1);
+    const delta = math.scaleVec(math.scaleVec(move, 1 / len), speed * dt);
+    camera.position = math.add(camera.position, delta);
+  }
+
+  return forward;
+}
+
+function updatePointLights(timeMs: number, out: Float32Array): number {
+  out.fill(0);
+  const count = Math.min(maxPointLights, Number.parseInt(ui.pointCount.value, 10) || 0);
+  const t = timeMs * 0.001;
+
+  for (let i = 0; i < count; i++) {
+    const controls = ui.points[i];
+    const light = pointLights[i];
+    light.color = hexToRgb01(controls.color.value);
+    light.intensity = Number.parseFloat(controls.intensity.value);
+    light.position = {
+      x: Number.parseFloat(controls.x.value),
+      y: Number.parseFloat(controls.y.value),
+      z: Number.parseFloat(controls.z.value),
+    };
+
+    // Небольшая анимация, чтобы свет в сцене жил
+    if (i === 0) {
+      light.position.x += Math.cos(t) * 0.35;
+      light.position.z += Math.sin(t) * 0.35;
+    } else if (i === 1) {
+      light.position.y += Math.sin(t * 1.6) * 0.2;
+    }
+
+    const base = i * 8;
+    out[base + 0] = light.position.x;
+    out[base + 1] = light.position.y;
+    out[base + 2] = light.position.z;
+    out[base + 3] = light.intensity;
+    out[base + 4] = light.color[0];
+    out[base + 5] = light.color[1];
+    out[base + 6] = light.color[2];
+    out[base + 7] = 0;
+  }
+  return count;
 }
 
 async function main() {
   if (!navigator.gpu) {
     alert("WebGPU не поддерживается в этом браузере. Попробуйте Chrome Canary/Edge/Safari TP.");
-
     return;
   }
 
@@ -35,7 +256,7 @@ async function main() {
     alert("Не удалось получить устройство WebGPU");
     return;
   }
-  const gpu = device; // non-null after guard
+  const gpu = device;
 
   const context = canvas.getContext("webgpu") as GPUCanvasContext;
   const format = navigator.gpu.getPreferredCanvasFormat();
@@ -48,12 +269,12 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  async function loadTexture(gpu: GPUDevice, url: string) {
+  async function loadTexture(gpuDevice: GPUDevice, url: string) {
     const img = new Image();
     img.src = url;
     await img.decode();
-    const bmp = await createImageBitmap(img, { imageOrientation: "flipY" }); // flipY для UV
-    const texture = gpu.createTexture({
+    const bmp = await createImageBitmap(img, { imageOrientation: "flipY" });
+    const texture = gpuDevice.createTexture({
       size: { width: bmp.width, height: bmp.height },
       format: "rgba8unorm",
       usage:
@@ -61,12 +282,12 @@ async function main() {
         GPUTextureUsage.COPY_DST |
         GPUTextureUsage.RENDER_ATTACHMENT,
     });
-    gpu.queue.copyExternalImageToTexture(
+    gpuDevice.queue.copyExternalImageToTexture(
       { source: bmp },
       { texture },
       { width: bmp.width, height: bmp.height },
     );
-    const sampler = gpu.createSampler({
+    const sampler = gpuDevice.createSampler({
       magFilter: "nearest",
       minFilter: "nearest",
       addressModeU: "repeat",
@@ -80,15 +301,10 @@ async function main() {
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
 
-  const cubePoint: Vec3 = {
-    x: 0.5,
-    y: 0.5,
-    z: 0.5,
-  };
-
+  const cubePoint: Vec3 = { x: 0.5, y: 0.5, z: 0.5 };
   const { x: hx, y: hy, z: hz } = cubePoint;
 
-  // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy) для плоского освещения (дублируем вершины по граням)
+  // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy)
   // biome-ignore format: ignore
   const baseVertices = new Float32Array([
     // front (z+)
@@ -148,11 +364,31 @@ async function main() {
   });
   gpu.queue.writeBuffer(ibo, 0, indices);
 
-  // Uniforms: 2 mat4 (128) + vec3 (12) + padding (4) = 144 bytes
-  const uniformSize = 16 * 4 + 16 * 4 + 12 + 4;
+  // 3 матрицы + камера + ambient + directional + material + количество точечных (+ паддинг)
+  const uniformOffsets = {
+    projection: 0,
+    view: 16,
+    model: 32,
+    cameraPos: 48,
+    ambient: 52,
+    directionalDir: 56,
+    directionalColor: 60,
+    materialAlbedo: 64,
+    materialSpecular: 68,
+    pointCount: 72,
+    padLights: 76,
+  } as const;
+  // 80 floats = 320 bytes (WGSL layout size for Scene)
+  const uniformData = new Float32Array(80);
   const ubo = gpu.createBuffer({
-    size: uniformSize,
+    size: uniformData.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  const pointLightData = new Float32Array(maxPointLights * 8);
+  const pointLightBuffer = gpu.createBuffer({
+    size: pointLightData.byteLength,
+    usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
   const bindGroupLayout = gpu.createBindGroupLayout({
@@ -160,6 +396,7 @@ async function main() {
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
       { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
       { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+      { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
     ],
   });
   const bindGroup = gpu.createBindGroup({
@@ -168,6 +405,7 @@ async function main() {
       { binding: 0, resource: { buffer: ubo } },
       { binding: 1, resource: texture.createView() },
       { binding: 2, resource: sampler },
+      { binding: 3, resource: { buffer: pointLightBuffer } },
     ],
   });
 
@@ -185,21 +423,9 @@ async function main() {
         {
           arrayStride: 32,
           attributes: [
-            {
-              shaderLocation: 0,
-              offset: 0,
-              format: "float32x3",
-            }, // position
-            {
-              shaderLocation: 1,
-              offset: 12,
-              format: "float32x3",
-            }, // normal
-            {
-              shaderLocation: 2,
-              offset: 24,
-              format: "float32x2",
-            }, // uv
+            { shaderLocation: 0, offset: 0, format: "float32x3" }, // position
+            { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
+            { shaderLocation: 2, offset: 24, format: "float32x2" }, // uv
           ],
         },
       ],
@@ -221,94 +447,90 @@ async function main() {
     },
   });
 
-  let start = performance.now();
-  let startAngle = 0;
-  const spinSpeed = 700;
-
-  function toggleSpin(e: Event) {
-    if ((e.target as HTMLInputElement).checked) {
-      start = performance.now();
-      startAngle = parseFloat(ui.rot.value);
-    }
-  }
-
-  ui.spin.addEventListener("change", toggleSpin);
-
-  function resetUI() {
-    ui.sx.value = "0.5";
-    ui.sy.value = "0.5";
-    ui.sz.value = "0.5";
-    ui.tz.value = "1.5";
-  }
-
-  ui.reset.addEventListener("click", resetUI);
+  let lastTime = performance.now();
 
   function frame() {
     const now = performance.now();
-    const t = (startAngle + (now - start) / spinSpeed) % (Math.PI * 2);
+    const dt = (now - lastTime) / 1000;
+    lastTime = now;
 
-    const spin = ui.spin.checked;
-    ui.rot.value = spin ? t.toString() : ui.rot.value;
-    const rotation = spin ? t : parseFloat(ui.rot.value);
+    const forward = updateCamera(dt);
 
-    const baseScaleY = parseFloat(ui.sy.value);
-    const pulse = ui.pulse.checked ? 1 + 0.2 * Math.sin(t * 5.0) : 1;
+    const rotation = ui.spin.checked
+      ? (() => {
+          const angle = (spinOrigin + (now - spinStart) / spinSpeedMs) % (Math.PI * 2);
+          ui.rot.value = angle.toString();
+          return angle;
+        })()
+      : Number.parseFloat(ui.rot.value);
+
+    const baseScaleY = Number.parseFloat(ui.sy.value);
+    const pulse = ui.pulse.checked ? 1 + 0.2 * Math.sin(now * 0.012) : 1;
     const scaleVec = {
-      x: parseFloat(ui.sx.value),
+      x: Number.parseFloat(ui.sx.value),
       y: baseScaleY * pulse,
-      z: parseFloat(ui.sz.value),
+      z: Number.parseFloat(ui.sz.value),
     };
-    const pos: Vec3 = { x: 0, y: 0, z: parseFloat(ui.tz.value) };
+    const scaleMat = math.scale(scaleVec);
+    const rotationMat = math.multiply(
+      math.rotationAxisY(rotation),
+      math.rotationAxisX(-Math.PI / 7),
+    );
+    const model = math.multiply(
+      math.translation({ x: 0, y: 0, z: Number.parseFloat(ui.tz.value) }),
+      math.multiply(rotationMat, scaleMat),
+    );
 
-    // Готовим буфер вершин с масштабированными позициями
-    const scaled = new Float32Array(baseVertices.length);
-    for (let i = 0; i < baseVertices.length; i += 8) {
-      // pos = [i+0..i+2], normal = [i+3..i+5], uv = [i+6..i+7]
-      scaled[i + 0] = baseVertices[i + 0] * scaleVec.x;
-      scaled[i + 1] = baseVertices[i + 1] * scaleVec.y;
-      scaled[i + 2] = baseVertices[i + 2] * scaleVec.z;
-
-      scaled[i + 3] = baseVertices[i + 3];
-      scaled[i + 4] = baseVertices[i + 4];
-      scaled[i + 5] = baseVertices[i + 5];
-
-      scaled[i + 6] = baseVertices[i + 6];
-      scaled[i + 7] = baseVertices[i + 7];
-    }
-
-    // Перезаписываем буфер вершин
-    gpu.queue.writeBuffer(vbo, 0, scaled);
-
-    // transform без масштаба: меняем только ориентацию и положение
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
-    const rot = math.multiply(math.rotationAxisY(rotation), math.rotationAxisX(-Math.PI / 7));
-    const trans = math.translation(pos);
-    const transform = math.multiply(rot, trans);
+    const view = math.lookAt(camera.position, math.add(camera.position, forward), {
+      x: 0,
+      y: 1,
+      z: 0,
+    });
 
-    const color = hexToRgb01("#ffffff");
+    uniformData.set(proj, uniformOffsets.projection);
+    uniformData.set(view, uniformOffsets.view);
+    uniformData.set(model, uniformOffsets.model);
 
-    // Готовим буфер uniforms
-    const data = new Float32Array(uniformSize / 4);
-    data.set(proj, 0);
-    data.set(transform, 16);
-    data.set(color, 32);
+    uniformData[uniformOffsets.cameraPos + 0] = camera.position.x;
+    uniformData[uniformOffsets.cameraPos + 1] = camera.position.y;
+    uniformData[uniformOffsets.cameraPos + 2] = camera.position.z;
 
-    // Перезаписываем буфер uniforms
-    gpu.queue.writeBuffer(ubo, 0, data);
+    const ambientColor = hexToRgb01(ui.ambientColor.value);
+    uniformData.set(ambientColor, uniformOffsets.ambient);
+    uniformData[uniformOffsets.ambient + 3] = Number.parseFloat(ui.ambientIntensity.value);
+
+    const dirVec = directionFromAngles(
+      Number.parseFloat(ui.dirYaw.value),
+      Number.parseFloat(ui.dirPitch.value),
+    );
+    const dirColor = hexToRgb01(ui.dirColor.value);
+    uniformData.set(
+      [dirVec.x, dirVec.y, dirVec.z, Number.parseFloat(ui.dirIntensity.value)],
+      uniformOffsets.directionalDir,
+    );
+    uniformData.set(dirColor, uniformOffsets.directionalColor);
+
+    const albedoColor = hexToRgb01(ui.matAlbedo.value);
+    const specularColor = hexToRgb01(ui.matSpecular.value);
+    uniformData.set(albedoColor, uniformOffsets.materialAlbedo);
+    uniformData[uniformOffsets.materialAlbedo + 3] = Number.parseFloat(ui.matShininess.value);
+    uniformData.set(specularColor, uniformOffsets.materialSpecular);
+
+    const activePointLights = updatePointLights(now, pointLightData);
+    uniformData[uniformOffsets.pointCount] = activePointLights;
+    gpu.queue.writeBuffer(pointLightBuffer, 0, pointLightData);
+
+    gpu.queue.writeBuffer(ubo, 0, uniformData);
 
     const colorTex = context.getCurrentTexture();
-    const view = colorTex.createView();
+    const viewTex = colorTex.createView();
     const encoder = gpu.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
-          view,
-          clearValue: {
-            r: 0.1,
-            g: 0.1,
-            b: 0.1,
-            a: 1,
-          },
+          view: viewTex,
+          clearValue: { r: 0.05, g: 0.05, b: 0.06, a: 1 },
           loadOp: "clear",
           storeOp: "store",
         },

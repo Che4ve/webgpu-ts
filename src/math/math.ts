@@ -11,11 +11,11 @@ export function identity(): Mat4 {
 
 export function multiply(a: Mat4, b: Mat4): Mat4 {
   const r = new Float32Array(16);
-  for (let j = 0; j < 4; j++) {
-    for (let i = 0; i < 4; i++) {
+  for (let col = 0; col < 4; col++) {
+    for (let row = 0; row < 4; row++) {
       let s = 0;
-      for (let k = 0; k < 4; k++) s += a[j * 4 + k] * b[k * 4 + i];
-      r[j * 4 + i] = s;
+      for (let k = 0; k < 4; k++) s += a[k * 4 + row] * b[col * 4 + k];
+      r[col * 4 + row] = s;
     }
   }
   return r;
@@ -80,3 +80,57 @@ export function scale(v: Vec3): Mat4 {
 export const rotationAxisX = (angle: number) => rotation({ x: 1, y: 0, z: 0 }, angle);
 export const rotationAxisY = (angle: number) => rotation({ x: 0, y: 1, z: 0 }, angle);
 export const rotationAxisZ = (angle: number) => rotation({ x: 0, y: 0, z: 1 }, angle);
+
+export function add(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x + b.x, y: a.y + b.y, z: a.z + b.z };
+}
+
+export function sub(a: Vec3, b: Vec3): Vec3 {
+  return { x: a.x - b.x, y: a.y - b.y, z: a.z - b.z };
+}
+
+export function dot(a: Vec3, b: Vec3): number {
+  return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+export function cross(a: Vec3, b: Vec3): Vec3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
+}
+
+export function scaleVec(v: Vec3, s: number): Vec3 {
+  return { x: v.x * s, y: v.y * s, z: v.z * s };
+}
+
+export function normalize(v: Vec3): Vec3 {
+  const len = Math.hypot(v.x, v.y, v.z) || 1;
+  return { x: v.x / len, y: v.y / len, z: v.z / len };
+}
+
+// Left-handed look-at (forward is +Z like WebGPU's default projection)
+export function lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
+  const forward = normalize(sub(target, eye));
+  const right = normalize(cross(up, forward));
+  const camUp = cross(forward, right);
+
+  const m = identity();
+  m[0] = right.x;
+  m[1] = right.y;
+  m[2] = right.z;
+
+  m[4] = camUp.x;
+  m[5] = camUp.y;
+  m[6] = camUp.z;
+
+  m[8] = forward.x;
+  m[9] = forward.y;
+  m[10] = forward.z;
+
+  m[12] = -dot(right, eye);
+  m[13] = -dot(camUp, eye);
+  m[14] = -dot(forward, eye);
+  return m;
+}

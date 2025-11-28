@@ -1,13 +1,15 @@
 ## 1 лаба
 
-сдал
+Сдал
 
-оценка: 4
+Оценка: 4
 
 ## 2 лаба
-[условие](https://docs.google.com/document/d/1snFWFBJnA-_YdYyLiopnAY4OqiEM376BxZRsJ5euhs0/edit?tab=t.ntr9yvabrlfw)
+[Условие](https://docs.google.com/document/d/1snFWFBJnA-_YdYyLiopnAY4OqiEM376BxZRsJ5euhs0/edit?tab=t.ntr9yvabrlfw)
 \
-оценка: 
+Вариант: <b>2</b>
+\
+Оценка: 
 <details>
 - <summary><b>Информация</b></summary>
 Варианты берём по формуле ((N - 1) % 4) + 1
@@ -35,9 +37,11 @@ veekay::input::keyboard содержит функции для работы с �
 
 
 ## 3 лаба
-[условие](https://docs.google.com/document/d/1CDxzRP96P2U5yEl6Z4pAu37lSlHoQGf4qxIEru0qInc/edit?tab=t.ntr9yvabrlfw)
+[Условие](https://docs.google.com/document/d/1CDxzRP96P2U5yEl6Z4pAu37lSlHoQGf4qxIEru0qInc/edit?tab=t.ntr9yvabrlfw)
 \
-оценка: 
+Вариант: 
+\
+Оценка: 
 <details>
 <summary><b>Информация</b></summary>
 Вариантов у этой лабы нет. Есть условия только на базовую оценку 3 и базовую оценку 4. Доп. задания присутствуют.
