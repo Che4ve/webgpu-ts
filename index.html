@@ -13,24 +13,6 @@
       </div>
       <form id="controls-form" class="ui">
         <fieldset>
-          <legend>Model</legend>
-          <p class="note">
-            WASD + мышь — движение камеры. Пробел/Control — вверх/вниз. Shift — ускорение. Кликните по canvas,
-            чтобы захватить курсор.
-          </p>
-          <label>Scale X <input id="sr-x" type="range" min="0" max="2" step="0.01" value="0.5"></label>
-          <label>Scale Y <input id="sr-y" type="range" min="0" max="2" step="0.01" value="0.5"></label>
-          <label>Scale Z <input id="sr-z" type="range" min="0" max="2" step="0.01" value="0.5"></label>
-          <label>Translation Z <input id="tr-z" type="range" min="0" max="12" step="0.01" value="2.5"></label>
-          <label>Rotation <input id="rot" type="range" min="0" max="6.283185307179586" step="0.01" value="2.5"></label>
-          <div class="row">
-            <label>Spin <input id="spin" type="checkbox"></label>
-            <label>Pulse Y <input id="pulse" type="checkbox"></label>
-          </div>
-          <button id="reset" type="button">Reset</button>
-        </fieldset>
-
-        <fieldset>
           <legend>Lighting</legend>
           <div class="subgrid two-col">
             <div class="card">
@@ -56,7 +38,7 @@
             </div>
             <div class="card">
               <h4>Point lights</h4>
-              <label>Count <input id="point-count" type="range" min="0" max="4" step="1" value="3"></label>
+              <label>Count <input id="point-count" type="range" min="0" max="2" step="1" value="2"></label>
               <div class="point-grid">
                 <div class="point">
                   <div class="point-title">P1</div>
@@ -78,29 +60,26 @@
                     <label>Z <input id="p1-z" type="range" min="-4" max="4" step="0.1" value="1.4"></label>
                   </div>
                 </div>
-                <div class="point">
-                  <div class="point-title">P3</div>
-                  <label>Color <input id="p2-color" type="color" value="#9dffb5"></label>
-                  <label>Intensity <input id="p2-intensity" type="range" min="0" max="30" step="0.1" value="4"></label>
-                  <div class="triple">
-                    <label>X <input id="p2-x" type="range" min="-4" max="4" step="0.1" value="0"></label>
-                    <label>Y <input id="p2-y" type="range" min="0" max="3" step="0.1" value="1.8"></label>
-                    <label>Z <input id="p2-z" type="range" min="-4" max="4" step="0.1" value="-2.2"></label>
-                  </div>
-                </div>
-                <div class="point">
-                  <div class="point-title">P4</div>
-                  <label>Color <input id="p3-color" type="color" value="#ff9bed"></label>
-                  <label>Intensity <input id="p3-intensity" type="range" min="0" max="30" step="0.1" value="4"></label>
-                  <div class="triple">
-                    <label>X <input id="p3-x" type="range" min="-4" max="4" step="0.1" value="2"></label>
-                    <label>Y <input id="p3-y" type="range" min="0" max="3" step="0.1" value="0.9"></label>
-                    <label>Z <input id="p3-z" type="range" min="-4" max="4" step="0.1" value="-1.2"></label>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
+        </fieldset>
+        <fieldset>
+          <legend>Model</legend>
+          <p class="note">
+            WASD + мышь — движение камеры. Пробел/Control — вверх/вниз. Shift — ускорение. Кликните по canvas,
+            чтобы захватить курсор.
+          </p>
+          <label>Scale X <input id="sr-x" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>Scale Y <input id="sr-y" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>Scale Z <input id="sr-z" type="range" min="0" max="2" step="0.01" value="0.5"></label>
+          <label>Translation Z <input id="tr-z" type="range" min="0" max="12" step="0.01" value="2.5"></label>
+          <label>Rotation <input id="rot" type="range" min="0" max="6.283185307179586" step="0.01" value="2.5"></label>
+          <div class="row">
+            <label>Spin <input id="spin" type="checkbox"></label>
+            <label>Pulse Y <input id="pulse" type="checkbox"></label>
+          </div>
+          <button id="reset" type="button">Reset</button>
         </fieldset>
       </form>
     </div>

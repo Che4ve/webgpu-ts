@@ -37,7 +37,7 @@ struct PointLight {
   _pad : f32,
 };
 
-const MAX_POINT_LIGHTS : u32 = 4u;
+const MAX_POINT_LIGHTS : u32 = 2u;
 
 @group(0) @binding(0) var<uniform> scene : Scene;
 @group(0) @binding(1) var tex : texture_2d<f32>;

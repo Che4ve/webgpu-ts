@@ -17,7 +17,7 @@ type PointLightUI = {
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const form = document.getElementById("controls-form") as HTMLFormElement;
-const maxPointLights = 4;
+const maxPointLights = 2;
 
 const ui = {
   sx: document.getElementById("sr-x") as HTMLInputElement,
