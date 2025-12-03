@@ -117,18 +117,22 @@ export function lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
   const camUp = cross(forward, right);
 
   const m = identity();
+  // Строка 0: right вектор (X-ось камеры)
   m[0] = right.x;
-  m[1] = right.y;
-  m[2] = right.z;
+  m[4] = right.y;
+  m[8] = right.z;
 
-  m[4] = camUp.x;
+  // Строка 1: camUp вектор (Y-ось камеры)
+  m[1] = camUp.x;
   m[5] = camUp.y;
-  m[6] = camUp.z;
+  m[9] = camUp.z;
 
-  m[8] = forward.x;
-  m[9] = forward.y;
+  // Строка 2: forward вектор (Z-ось камеры)
+  m[2] = forward.x;
+  m[6] = forward.y;
   m[10] = forward.z;
 
+  // Translation (строки 12-14 остаются без изменений)
   m[12] = -dot(right, eye);
   m[13] = -dot(camUp, eye);
   m[14] = -dot(forward, eye);

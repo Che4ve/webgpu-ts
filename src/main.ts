@@ -206,6 +206,54 @@ function updateCamera(dt: number): Vec3 {
 
   return forward;
 }
+function createSphere(
+  radius: number,
+  segments: number = 16,
+): {
+  vertices: Float32Array;
+  indices: Uint32Array;
+} {
+  const vertices: number[] = [];
+  const indices: number[] = [];
+
+  // Генерируем вершины сферы через параметрические координаты
+  for (let lat = 0; lat <= segments; lat++) {
+    const theta = (lat * Math.PI) / segments; // от 0 до π
+    const sinTheta = Math.sin(theta);
+    const cosTheta = Math.cos(theta);
+
+    for (let lon = 0; lon <= segments; lon++) {
+      const phi = (lon * 2 * Math.PI) / segments; // от 0 до 2π
+      const sinPhi = Math.sin(phi);
+      const cosPhi = Math.cos(phi);
+
+      // Позиция вершины
+      const x = radius * cosPhi * sinTheta;
+      const y = radius * cosTheta;
+      const z = radius * sinPhi * sinTheta;
+
+      vertices.push(x, y, z);
+    }
+  }
+
+  // Генерируем индексы для треугольников
+  for (let lat = 0; lat < segments; lat++) {
+    for (let lon = 0; lon < segments; lon++) {
+      const first = lat * (segments + 1) + lon;
+      const second = first + segments + 1;
+
+      // Первый треугольник
+      indices.push(first, second, first + 1);
+      // Второй треугольник
+      indices.push(second, second + 1, first + 1);
+    }
+  }
+
+  return {
+    vertices: new Float32Array(vertices),
+    indices: new Uint32Array(indices),
+  };
+}
 
 function updatePointLights(timeMs: number, out: Float32Array): number {
   out.fill(0);
@@ -447,6 +495,105 @@ async function main() {
     },
   });
 
+  // Создаем сферу для визуализации источников света
+  const lightSphereRadius = 0.08;
+  const lightSphereSegments = 16;
+  const lightSphere = createSphere(lightSphereRadius, lightSphereSegments);
+
+  const lightVbo = gpu.createBuffer({
+    size: lightSphere.vertices.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  gpu.queue.writeBuffer(lightVbo, 0, new Float32Array(lightSphere.vertices));
+
+  const lightIbo = gpu.createBuffer({
+    size: lightSphere.indices.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+  });
+  gpu.queue.writeBuffer(lightIbo, 0, new Uint32Array(lightSphere.indices));
+
+  // Uniform буферы для визуализации источников (отдельные для каждого источника)
+  const lightUniformSize = 16 * 4 * 3; // 3 mat4 (projection, view, model)
+  const lightColorBufferSize = 16; // vec3 + padding
+
+  // Bind group layout для визуализатора источников
+  const lightBindGroupLayout = gpu.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, buffer: {} },
+    ],
+  });
+
+  // Создаем массивы буферов для каждого источника
+  const lightUbos: GPUBuffer[] = [];
+  const lightColorBuffers: GPUBuffer[] = [];
+  const lightBindGroups: GPUBindGroup[] = [];
+
+  for (let i = 0; i < maxPointLights; i++) {
+    const lightUbo = gpu.createBuffer({
+      size: lightUniformSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    lightUbos.push(lightUbo);
+
+    const lightColorBuffer = gpu.createBuffer({
+      size: lightColorBufferSize,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+    lightColorBuffers.push(lightColorBuffer);
+
+    // Создаем bind group заранее
+    const lightBindGroup = gpu.createBindGroup({
+      layout: lightBindGroupLayout,
+      entries: [
+        { binding: 0, resource: { buffer: lightUbo } },
+        { binding: 1, resource: { buffer: lightColorBuffer } },
+      ],
+    });
+    lightBindGroups.push(lightBindGroup);
+  }
+
+  // Временные массивы для обновления данных
+  const lightUniformDataArrays = Array.from(
+    { length: maxPointLights },
+    () => new Float32Array(lightUniformSize / 4),
+  );
+  const lightColorDataArrays = Array.from({ length: maxPointLights }, () => new Float32Array(4));
+
+  // Загружаем шейдеры для визуализации источников
+  const lightVertWGSL = await (await fetch("/src/shaders/light_visualizer.vert.wgsl")).text();
+  const lightFragWGSL = await (await fetch("/src/shaders/light_visualizer.frag.wgsl")).text();
+
+  // Pipeline для визуализации источников света
+  const lightPipeline = await gpu.createRenderPipelineAsync({
+    layout: gpu.createPipelineLayout({ bindGroupLayouts: [lightBindGroupLayout] }),
+    vertex: {
+      module: gpu.createShaderModule({ code: lightVertWGSL }),
+      entryPoint: "main",
+      buffers: [
+        {
+          arrayStride: 12, // только position (vec3)
+          attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }],
+        },
+      ],
+    },
+    fragment: {
+      module: gpu.createShaderModule({ code: lightFragWGSL }),
+      entryPoint: "main",
+      targets: [{ format }],
+    },
+    primitive: {
+      topology: "triangle-list",
+      cullMode: "none",
+      frontFace: "cw",
+    },
+    depthStencil: {
+      format: "depth24plus",
+      depthWriteEnabled: true,
+      depthCompare: "less-equal",
+    },
+  });
+
   let lastTime = performance.now();
 
   function frame() {
@@ -548,6 +695,46 @@ async function main() {
     pass.setIndexBuffer(ibo, "uint32");
     pass.setBindGroup(0, bindGroup);
     pass.drawIndexed(indices.length);
+
+    // Рендерим визуализацию точечных источников света
+    const pointCount = Math.min(maxPointLights, Number.parseInt(ui.pointCount.value, 10) || 0);
+
+    if (pointCount > 0) {
+      // Подготавливаем данные для всех источников заранее
+      for (let i = 0; i < pointCount; i++) {
+        const light = pointLights[i];
+        const uniformData = lightUniformDataArrays[i];
+        const colorData = lightColorDataArrays[i];
+
+        // Устанавливаем projection и view (одинаковые для всех)
+        uniformData.set(proj, 0);
+        uniformData.set(view, 16);
+
+        // Создаем матрицу модели для позиции источника
+        const lightModel = math.translation(light.position);
+        uniformData.set(lightModel, 32);
+
+        // Устанавливаем цвет источника
+        colorData[0] = light.color[0];
+        colorData[1] = light.color[1];
+        colorData[2] = light.color[2];
+        colorData[3] = 0; // padding
+
+        // Записываем данные в буферы
+        gpu.queue.writeBuffer(lightUbos[i], 0, uniformData);
+        gpu.queue.writeBuffer(lightColorBuffers[i], 0, colorData);
+      }
+
+      // Рендерим все источники
+      for (let i = 0; i < pointCount; i++) {
+        pass.setPipeline(lightPipeline);
+        pass.setVertexBuffer(0, lightVbo);
+        pass.setIndexBuffer(lightIbo, "uint32");
+        pass.setBindGroup(0, lightBindGroups[i]);
+        pass.drawIndexed(lightSphere.indices.length);
+      }
+    }
+
     pass.end();
 
     gpu.queue.submit([encoder.finish()]);
