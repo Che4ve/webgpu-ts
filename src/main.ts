@@ -1,295 +1,73 @@
-import type { Vec3 } from "./math";
+import { CameraController, directionFromAngles } from "./camera";
+import { hexToRgb01 } from "./color";
+import { createCube, createSphere } from "./geometry";
+import { createPointLights, updatePointLights } from "./lights";
 import * as math from "./math";
-
-type PointLight = {
-  position: Vec3;
-  color: [number, number, number];
-  intensity: number;
-};
-
-type PointLightUI = {
-  color: HTMLInputElement;
-  intensity: HTMLInputElement;
-  x: HTMLInputElement;
-  y: HTMLInputElement;
-  z: HTMLInputElement;
-};
+import lightFragWGSL from "./shaders/light_visualizer.frag.wgsl?raw";
+import lightVertWGSL from "./shaders/light_visualizer.vert.wgsl?raw";
+import cubeFragWGSL from "./shaders/shader.frag.wgsl?raw";
+import cubeVertWGSL from "./shaders/shader.vert.wgsl?raw";
+import { createUIManager } from "./ui";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
-const form = document.getElementById("controls-form") as HTMLFormElement;
 const maxPointLights = 2;
 
-const ui = {
-  sx: document.getElementById("sr-x") as HTMLInputElement,
-  sy: document.getElementById("sr-y") as HTMLInputElement,
-  sz: document.getElementById("sr-z") as HTMLInputElement,
-  tz: document.getElementById("tr-z") as HTMLInputElement,
-  rot: document.getElementById("rot") as HTMLInputElement,
-  spin: document.getElementById("spin") as HTMLInputElement,
-  pulse: document.getElementById("pulse") as HTMLInputElement,
-  reset: document.getElementById("reset") as HTMLButtonElement,
-  ambientColor: document.getElementById("ambient-color") as HTMLInputElement,
-  ambientIntensity: document.getElementById("ambient-intensity") as HTMLInputElement,
-  dirYaw: document.getElementById("dir-yaw") as HTMLInputElement,
-  dirPitch: document.getElementById("dir-pitch") as HTMLInputElement,
-  dirColor: document.getElementById("dir-color") as HTMLInputElement,
-  dirIntensity: document.getElementById("dir-intensity") as HTMLInputElement,
-  matAlbedo: document.getElementById("mat-albedo") as HTMLInputElement,
-  matSpecular: document.getElementById("mat-specular") as HTMLInputElement,
-  matShininess: document.getElementById("mat-shininess") as HTMLInputElement,
-  pointCount: document.getElementById("point-count") as HTMLInputElement,
-  points: Array.from({ length: maxPointLights }, (_, i) => ({
-    color: document.getElementById(`p${i}-color`) as HTMLInputElement,
-    intensity: document.getElementById(`p${i}-intensity`) as HTMLInputElement,
-    x: document.getElementById(`p${i}-x`) as HTMLInputElement,
-    y: document.getElementById(`p${i}-y`) as HTMLInputElement,
-    z: document.getElementById(`p${i}-z`) as HTMLInputElement,
-  })) as PointLightUI[],
-};
-
-const pointLights: PointLight[] = new Array(maxPointLights).fill(null).map(() => ({
-  position: { x: 0, y: 1, z: 0 },
-  color: [1, 1, 1],
-  intensity: 1,
-}));
-
-const defaultUI = {
-  sx: ui.sx.value,
-  sy: ui.sy.value,
-  sz: ui.sz.value,
-  tz: ui.tz.value,
-  rot: ui.rot.value,
-  spin: ui.spin.checked,
-  pulse: ui.pulse.checked,
-  ambientColor: ui.ambientColor.value,
-  ambientIntensity: ui.ambientIntensity.value,
-  dirYaw: ui.dirYaw.value,
-  dirPitch: ui.dirPitch.value,
-  dirColor: ui.dirColor.value,
-  dirIntensity: ui.dirIntensity.value,
-  matAlbedo: ui.matAlbedo.value,
-  matSpecular: ui.matSpecular.value,
-  matShininess: ui.matShininess.value,
-  pointCount: ui.pointCount.value,
-  points: ui.points.map((p) => ({
-    color: p.color.value,
-    intensity: p.intensity.value,
-    x: p.x.value,
-    y: p.y.value,
-    z: p.z.value,
-  })),
-};
-
-const pressedKeys = new Set<string>();
 const moveSpeed = 3.5;
 const sprintScale = 1.75;
 const mouseSensitivity = 0.0025;
 
 const defaultCamera = { position: { x: 0, y: 1.2, z: -3.2 }, yaw: 0, pitch: 0 };
-const camera = {
-  position: { ...defaultCamera.position },
-  yaw: defaultCamera.yaw,
-  pitch: defaultCamera.pitch,
-};
+const camera = new CameraController({
+  canvas,
+  moveSpeed,
+  sprintScale,
+  mouseSensitivity,
+  defaultState: defaultCamera,
+});
 
-let spinOrigin = Number.parseFloat(ui.rot.value);
+let spinOrigin = 0;
 let spinStart = performance.now();
 const spinSpeedMs = 700; // скорость вращения при Spin в мс/рад
 
-function hexToRgb01(hex: string): [number, number, number] {
-  const v = hex.startsWith("#") ? hex.slice(1) : hex;
-  const n = Number.parseInt(v, 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return [r / 255, g / 255, b / 255];
-}
-
-function directionFromAngles(yaw: number, pitch: number): Vec3 {
-  const cosPitch = Math.cos(pitch);
-  return math.normalize({
-    x: Math.sin(yaw) * cosPitch,
-    y: Math.sin(pitch),
-    z: Math.cos(yaw) * cosPitch,
-  });
-}
-
-const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
-
-window.addEventListener("keydown", (event) => {
-  pressedKeys.add(event.code);
-  if (
-    ["KeyW", "KeyA", "KeyS", "KeyD", "Space", "ShiftLeft", "ControlLeft", "KeyQ", "KeyE"].includes(
-      event.code,
-    )
-  ) {
-    event.preventDefault();
-  }
+const { ui } = createUIManager(maxPointLights, () => {
+  camera.reset();
+  spinStart = performance.now();
+  spinOrigin = Number.parseFloat(ui.rot.value);
 });
-window.addEventListener("keyup", (event) => pressedKeys.delete(event.code));
-
-canvas.addEventListener("click", () => {
-  if (document.pointerLockElement !== canvas) canvas.requestPointerLock();
-});
-
-document.addEventListener("mousemove", (event) => {
-  if (document.pointerLockElement !== canvas) return;
-  camera.yaw += event.movementX * mouseSensitivity;
-  camera.pitch -= event.movementY * mouseSensitivity;
-  const limit = Math.PI / 2 - 0.05;
-  camera.pitch = clamp(camera.pitch, -limit, limit);
-});
+spinOrigin = Number.parseFloat(ui.rot.value);
 
 ui.spin.addEventListener("change", () => {
   spinStart = performance.now();
   spinOrigin = Number.parseFloat(ui.rot.value);
 });
 
-function resetUI() {
-  if (form instanceof HTMLFormElement && typeof form.reset === "function") {
-    form.reset();
-  } else {
-    ui.sx.value = defaultUI.sx;
-    ui.sy.value = defaultUI.sy;
-    ui.sz.value = defaultUI.sz;
-    ui.tz.value = defaultUI.tz;
-    ui.rot.value = defaultUI.rot;
-    ui.spin.checked = defaultUI.spin;
-    ui.pulse.checked = defaultUI.pulse;
-    ui.ambientColor.value = defaultUI.ambientColor;
-    ui.ambientIntensity.value = defaultUI.ambientIntensity;
-    ui.dirYaw.value = defaultUI.dirYaw;
-    ui.dirPitch.value = defaultUI.dirPitch;
-    ui.dirColor.value = defaultUI.dirColor;
-    ui.dirIntensity.value = defaultUI.dirIntensity;
-    ui.matAlbedo.value = defaultUI.matAlbedo;
-    ui.matSpecular.value = defaultUI.matSpecular;
-    ui.matShininess.value = defaultUI.matShininess;
-    ui.pointCount.value = defaultUI.pointCount;
-    defaultUI.points.forEach((p, idx) => {
-      const dst = ui.points[idx];
-      dst.color.value = p.color;
-      dst.intensity.value = p.intensity;
-      dst.x.value = p.x;
-      dst.y.value = p.y;
-      dst.z.value = p.z;
-    });
-  }
-  camera.position = { ...defaultCamera.position };
-  camera.yaw = defaultCamera.yaw;
-  camera.pitch = defaultCamera.pitch;
-  spinStart = performance.now();
-  spinOrigin = Number.parseFloat(ui.rot.value);
-}
+const pointLights = createPointLights(maxPointLights);
 
-ui.reset.addEventListener("click", resetUI);
-
-function updateCamera(dt: number): Vec3 {
-  const forward = directionFromAngles(camera.yaw, camera.pitch);
-  const up: Vec3 = { x: 0, y: 1, z: 0 };
-  const right = math.normalize(math.cross(up, forward));
-
-  let move: Vec3 = { x: 0, y: 0, z: 0 };
-  if (pressedKeys.has("KeyW")) move = math.add(move, forward);
-  if (pressedKeys.has("KeyS")) move = math.sub(move, forward);
-  if (pressedKeys.has("KeyA")) move = math.sub(move, right);
-  if (pressedKeys.has("KeyD")) move = math.add(move, right);
-  if (pressedKeys.has("KeyE") || pressedKeys.has("Space")) move = math.add(move, up);
-  if (pressedKeys.has("KeyQ") || pressedKeys.has("ControlLeft")) move = math.sub(move, up);
-
-  const len = Math.hypot(move.x, move.y, move.z);
-  if (len > 0) {
-    const speed = moveSpeed * (pressedKeys.has("ShiftLeft") ? sprintScale : 1);
-    const delta = math.scaleVec(math.scaleVec(move, 1 / len), speed * dt);
-    camera.position = math.add(camera.position, delta);
-  }
-
-  return forward;
-}
-function createSphere(
-  radius: number,
-  segments: number = 16,
-): {
-  vertices: Float32Array;
-  indices: Uint32Array;
-} {
-  const vertices: number[] = [];
-  const indices: number[] = [];
-
-  // Генерируем вершины сферы через параметрические координаты
-  for (let lat = 0; lat <= segments; lat++) {
-    const theta = (lat * Math.PI) / segments; // от 0 до π
-    const sinTheta = Math.sin(theta);
-    const cosTheta = Math.cos(theta);
-
-    for (let lon = 0; lon <= segments; lon++) {
-      const phi = (lon * 2 * Math.PI) / segments; // от 0 до 2π
-      const sinPhi = Math.sin(phi);
-      const cosPhi = Math.cos(phi);
-
-      // Позиция вершины
-      const x = radius * cosPhi * sinTheta;
-      const y = radius * cosTheta;
-      const z = radius * sinPhi * sinTheta;
-
-      vertices.push(x, y, z);
-    }
-  }
-
-  // Генерируем индексы для треугольников
-  for (let lat = 0; lat < segments; lat++) {
-    for (let lon = 0; lon < segments; lon++) {
-      const first = lat * (segments + 1) + lon;
-      const second = first + segments + 1;
-
-      // Первый треугольник
-      indices.push(first, second, first + 1);
-      // Второй треугольник
-      indices.push(second, second + 1, first + 1);
-    }
-  }
-
-  return {
-    vertices: new Float32Array(vertices),
-    indices: new Uint32Array(indices),
-  };
-}
-
-function updatePointLights(timeMs: number, out: Float32Array): number {
-  out.fill(0);
-  const count = Math.min(maxPointLights, Number.parseInt(ui.pointCount.value, 10) || 0);
-  const t = timeMs * 0.001;
-
-  for (let i = 0; i < count; i++) {
-    const controls = ui.points[i];
-    const light = pointLights[i];
-    light.color = hexToRgb01(controls.color.value);
-    light.intensity = Number.parseFloat(controls.intensity.value);
-    light.position = {
-      x: Number.parseFloat(controls.x.value),
-      y: Number.parseFloat(controls.y.value),
-      z: Number.parseFloat(controls.z.value),
-    };
-
-    // Небольшая анимация, чтобы свет в сцене жил
-    if (i === 0) {
-      light.position.x += Math.cos(t) * 0.35;
-      light.position.z += Math.sin(t) * 0.35;
-    } else if (i === 1) {
-      light.position.y += Math.sin(t * 1.6) * 0.2;
-    }
-
-    const base = i * 8;
-    out[base + 0] = light.position.x;
-    out[base + 1] = light.position.y;
-    out[base + 2] = light.position.z;
-    out[base + 3] = light.intensity;
-    out[base + 4] = light.color[0];
-    out[base + 5] = light.color[1];
-    out[base + 6] = light.color[2];
-    out[base + 7] = 0;
-  }
-  return count;
+async function loadTexture(gpuDevice: GPUDevice, url: string) {
+  const img = new Image();
+  img.src = url;
+  await img.decode();
+  const bmp = await createImageBitmap(img, { imageOrientation: "flipY" });
+  const texture = gpuDevice.createTexture({
+    size: { width: bmp.width, height: bmp.height },
+    format: "rgba8unorm",
+    usage:
+      GPUTextureUsage.TEXTURE_BINDING |
+      GPUTextureUsage.COPY_DST |
+      GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  gpuDevice.queue.copyExternalImageToTexture(
+    { source: bmp },
+    { texture },
+    { width: bmp.width, height: bmp.height },
+  );
+  const sampler = gpuDevice.createSampler({
+    magFilter: "nearest",
+    minFilter: "nearest",
+    addressModeU: "repeat",
+    addressModeV: "repeat",
+  });
+  return { texture, sampler };
 }
 
 async function main() {
@@ -317,100 +95,28 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  async function loadTexture(gpuDevice: GPUDevice, url: string) {
-    const img = new Image();
-    img.src = url;
-    await img.decode();
-    const bmp = await createImageBitmap(img, { imageOrientation: "flipY" });
-    const texture = gpuDevice.createTexture({
-      size: { width: bmp.width, height: bmp.height },
-      format: "rgba8unorm",
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-    });
-    gpuDevice.queue.copyExternalImageToTexture(
-      { source: bmp },
-      { texture },
-      { width: bmp.width, height: bmp.height },
-    );
-    const sampler = gpuDevice.createSampler({
-      magFilter: "nearest",
-      minFilter: "nearest",
-      addressModeU: "repeat",
-      addressModeV: "repeat",
-    });
-    return { texture, sampler };
-  }
-
   const { texture, sampler } = await loadTexture(
     gpu,
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
 
-  const cubePoint: Vec3 = { x: 0.5, y: 0.5, z: 0.5 };
-  const { x: hx, y: hy, z: hz } = cubePoint;
-
-  // Вершины: позиция (xyz) + нормаль (xyz) + uv (xy)
-  // biome-ignore format: ignore
-  const baseVertices = new Float32Array([
-    // front (z+)
-    -hx,-hy, hz,  0,0,1,  0,0,
-     hx,-hy, hz,  0,0,1,  1,0,
-     hx, hy, hz,  0,0,1,  1,1,
-    -hx, hy, hz,  0,0,1,  0,1,
-    // back (z-)
-    -hx,-hy,-hz,  0,0,-1, 1,0,
-     hx,-hy,-hz,  0,0,-1, 0,0,
-     hx, hy,-hz,  0,0,-1, 0,1,
-    -hx, hy,-hz,  0,0,-1, 1,1,
-    // left (x-)
-    -hx,-hy,-hz, -1,0,0,  0,0,
-    -hx,-hy, hz, -1,0,0,  1,0,
-    -hx, hy, hz, -1,0,0,  1,1,
-    -hx, hy,-hz, -1,0,0,  0,1,
-    // right (x+)
-     hx,-hy,-hz,  1,0,0,  1,0,
-     hx,-hy, hz,  1,0,0,  0,0,
-     hx, hy, hz,  1,0,0,  0,1,
-     hx, hy,-hz,  1,0,0,  1,1,
-    // top (y+)
-    -hx, hy,-hz,  0,1,0,  0,1,
-    -hx, hy, hz,  0,1,0,  0,0,
-     hx, hy, hz,  0,1,0,  1,0,
-     hx, hy,-hz,  0,1,0,  1,1,
-    // bottom (y-)
-    -hx,-hy,-hz,  0,-1,0, 0,0,
-    -hx,-hy, hz,  0,-1,0, 0,1,
-     hx,-hy, hz,  0,-1,0, 1,1,
-     hx,-hy,-hz,  0,-1,0, 1,0,
-  ]);
-
-  // Индексы: по 2 треугольника на грань
-  // biome-ignore format: ignore
-  const indices = new Uint32Array([
-    0, 1, 2,  2, 3, 0,      // front
-    4, 5, 6,  6, 7, 4,      // back
-    8, 9,10, 10,11, 8,      // left
-   12,13,14, 14,15,12,      // right
-   16,17,18, 18,19,16,      // top
-   20,21,22, 22,23,20,      // bottom
-  ]);
+  const cube = createCube(1);
+  const cubeVertices = new Float32Array(cube.vertices);
+  const cubeIndices = new Uint32Array(cube.indices);
 
   const vbo = gpu.createBuffer({
-    size: baseVertices.byteLength,
+    size: cubeVertices.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: false,
   });
-  gpu.queue.writeBuffer(vbo, 0, baseVertices);
+  gpu.queue.writeBuffer(vbo, 0, cubeVertices);
 
   const ibo = gpu.createBuffer({
-    size: indices.byteLength,
+    size: cubeIndices.byteLength,
     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: false,
   });
-  gpu.queue.writeBuffer(ibo, 0, indices);
+  gpu.queue.writeBuffer(ibo, 0, cubeIndices);
 
   // 3 матрицы + камера + ambient + directional + material + количество точечных (+ паддинг)
   const uniformOffsets = {
@@ -459,13 +165,10 @@ async function main() {
 
   const pipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
 
-  const vertWGSL = await (await fetch("/src/shaders/shader.vert.wgsl")).text();
-  const fragWGSL = await (await fetch("/src/shaders/shader.frag.wgsl")).text();
-
   const pipeline = await gpu.createRenderPipelineAsync({
     layout: pipelineLayout,
     vertex: {
-      module: gpu.createShaderModule({ code: vertWGSL }),
+      module: gpu.createShaderModule({ code: cubeVertWGSL }),
       entryPoint: "main",
       buffers: [
         {
@@ -479,7 +182,7 @@ async function main() {
       ],
     },
     fragment: {
-      module: gpu.createShaderModule({ code: fragWGSL }),
+      module: gpu.createShaderModule({ code: cubeFragWGSL }),
       entryPoint: "main",
       targets: [{ format }],
     },
@@ -499,18 +202,20 @@ async function main() {
   const lightSphereRadius = 0.08;
   const lightSphereSegments = 16;
   const lightSphere = createSphere(lightSphereRadius, lightSphereSegments);
+  const lightVertices = new Float32Array(lightSphere.vertices);
+  const lightIndices = new Uint32Array(lightSphere.indices);
 
   const lightVbo = gpu.createBuffer({
-    size: lightSphere.vertices.byteLength,
+    size: lightVertices.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
   });
-  gpu.queue.writeBuffer(lightVbo, 0, new Float32Array(lightSphere.vertices));
+  gpu.queue.writeBuffer(lightVbo, 0, lightVertices);
 
   const lightIbo = gpu.createBuffer({
-    size: lightSphere.indices.byteLength,
+    size: lightIndices.byteLength,
     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
   });
-  gpu.queue.writeBuffer(lightIbo, 0, new Uint32Array(lightSphere.indices));
+  gpu.queue.writeBuffer(lightIbo, 0, lightIndices);
 
   // Uniform буферы для визуализации источников (отдельные для каждого источника)
   const lightUniformSize = 16 * 4 * 3; // 3 mat4 (projection, view, model)
@@ -560,10 +265,6 @@ async function main() {
   );
   const lightColorDataArrays = Array.from({ length: maxPointLights }, () => new Float32Array(4));
 
-  // Загружаем шейдеры для визуализации источников
-  const lightVertWGSL = await (await fetch("/src/shaders/light_visualizer.vert.wgsl")).text();
-  const lightFragWGSL = await (await fetch("/src/shaders/light_visualizer.frag.wgsl")).text();
-
   // Pipeline для визуализации источников света
   const lightPipeline = await gpu.createRenderPipelineAsync({
     layout: gpu.createPipelineLayout({ bindGroupLayouts: [lightBindGroupLayout] }),
@@ -601,7 +302,7 @@ async function main() {
     const dt = (now - lastTime) / 1000;
     lastTime = now;
 
-    const forward = updateCamera(dt);
+    const forward = camera.update(dt);
 
     const rotation = ui.spin.checked
       ? (() => {
@@ -629,7 +330,7 @@ async function main() {
     );
 
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
-    const view = math.lookAt(camera.position, math.add(camera.position, forward), {
+    const view = math.lookAt(camera.state.position, math.add(camera.state.position, forward), {
       x: 0,
       y: 1,
       z: 0,
@@ -639,9 +340,9 @@ async function main() {
     uniformData.set(view, uniformOffsets.view);
     uniformData.set(model, uniformOffsets.model);
 
-    uniformData[uniformOffsets.cameraPos + 0] = camera.position.x;
-    uniformData[uniformOffsets.cameraPos + 1] = camera.position.y;
-    uniformData[uniformOffsets.cameraPos + 2] = camera.position.z;
+    uniformData[uniformOffsets.cameraPos + 0] = camera.state.position.x;
+    uniformData[uniformOffsets.cameraPos + 1] = camera.state.position.y;
+    uniformData[uniformOffsets.cameraPos + 2] = camera.state.position.z;
 
     const ambientColor = hexToRgb01(ui.ambientColor.value);
     uniformData.set(ambientColor, uniformOffsets.ambient);
@@ -664,7 +365,12 @@ async function main() {
     uniformData[uniformOffsets.materialAlbedo + 3] = Number.parseFloat(ui.matShininess.value);
     uniformData.set(specularColor, uniformOffsets.materialSpecular);
 
-    const activePointLights = updatePointLights(now, pointLightData);
+    const activePointLights = updatePointLights(
+      now,
+      { count: ui.pointCount, entries: ui.points },
+      pointLights,
+      pointLightData,
+    );
     uniformData[uniformOffsets.pointCount] = activePointLights;
     gpu.queue.writeBuffer(pointLightBuffer, 0, pointLightData);
 
@@ -694,10 +400,10 @@ async function main() {
     pass.setVertexBuffer(0, vbo);
     pass.setIndexBuffer(ibo, "uint32");
     pass.setBindGroup(0, bindGroup);
-    pass.drawIndexed(indices.length);
+    pass.drawIndexed(cubeIndices.length);
 
     // Рендерим визуализацию точечных источников света
-    const pointCount = Math.min(maxPointLights, Number.parseInt(ui.pointCount.value, 10) || 0);
+    const pointCount = activePointLights;
 
     if (pointCount > 0) {
       // Подготавливаем данные для всех источников заранее
@@ -731,7 +437,7 @@ async function main() {
         pass.setVertexBuffer(0, lightVbo);
         pass.setIndexBuffer(lightIbo, "uint32");
         pass.setBindGroup(0, lightBindGroups[i]);
-        pass.drawIndexed(lightSphere.indices.length);
+        pass.drawIndexed(lightIndices.length);
       }
     }
 
