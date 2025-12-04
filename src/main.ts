@@ -1,3 +1,35 @@
+/**
+ * ============================================================================
+ * MAIN.TS - Главный файл приложения WebGPU с Shadow Mapping
+ * ============================================================================
+ *
+ * Этот файл содержит:
+ * 1) Инициализацию WebGPU
+ * 2) Создание ресурсов (текстуры, буферы, pipelines)
+ * 3) Render loop с двумя проходами:
+ *    - Shadow Pass: рендеринг в shadow map
+ *    - Main Pass: обычный рендеринг с тенями
+ *
+ * АРХИТЕКТУРА SHADOW MAPPING:
+ *
+ *   ┌─────────────────┐
+ *   │   Shadow Pass   │  ← Рендерим сцену "глазами света"
+ *   │  (depth only)   │     Записываем глубину в shadow map
+ *   └────────┬────────┘
+ *            │
+ *            ▼
+ *   ┌─────────────────┐
+ *   │   Shadow Map    │  ← 2D текстура с глубиной
+ *   │ (depth texture) │     Формат: depth32float
+ *   └────────┬────────┘
+ *            │
+ *            ▼
+ *   ┌─────────────────┐
+ *   │   Main Pass     │  ← Обычный рендеринг
+ *   │  (with shadows) │     Сравниваем глубину с shadow map
+ *   └─────────────────┘
+ */
+
 import { CameraController, directionFromAngles } from "./camera";
 import { hexToRgb01 } from "./color";
 import { createCube, createPlane, createSphere } from "./geometry";
@@ -8,12 +40,18 @@ import lightVertWGSL from "./shaders/light_visualizer.vert.wgsl?raw";
 import cubeFragWGSL from "./shaders/shader.frag.wgsl?raw";
 import cubeVertWGSL from "./shaders/shader.vert.wgsl?raw";
 import envFragWGSL from "./shaders/environment.frag.wgsl?raw";
-import shadowVertWGSL from "./shaders/shadow.vert.wgsl?raw";
+import shadowVertWGSL from "./shaders/shadow.vert.wgsl?raw"; // Шейдер для shadow pass
 import { createUIManager } from "./ui";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const maxPointLights = 2;
-const SHADOW_MAP_SIZE = 4096;
+
+/**
+ * Размер shadow map в пикселях.
+ * Больше = качественнее тени, но больше памяти и медленнее.
+ * Типичные значения: 1024, 2048, 4096
+ */
+const SHADOW_MAP_SIZE = 2048;
 
 const moveSpeed = 3.5;
 const sprintScale = 1.75;
@@ -98,17 +136,42 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  // ============================================
-  // Shadow Map: текстура глубины для теней от направленного источника
-  // ============================================
+  // ============================================================================
+  // SHADOW MAP - текстура глубины для теней
+  // ============================================================================
+  //
+  // Shadow Map - это текстура, в которую мы рендерим глубину сцены
+  // с точки зрения источника света.
+  //
+  // Потом, при обычном рендеринге, мы сравниваем глубину каждого пикселя
+  // с глубиной в shadow map. Если пиксель дальше - он в тени!
+  //
   const shadowMapTexture = gpu.createTexture({
     size: { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE },
+
+    // depth32float - формат с 32-битной глубиной (высокая точность)
+    // Можно использовать depth24plus для экономии памяти
     format: "depth32float",
+
+    // RENDER_ATTACHMENT - можно рендерить в эту текстуру
+    // TEXTURE_BINDING - можно читать в шейдере (для сравнения глубины)
     usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
   });
   const shadowMapView = shadowMapTexture.createView();
 
-  // Comparison sampler для shadow mapping
+  // ============================================================================
+  // COMPARISON SAMPLER - сэмплер со сравнением
+  // ============================================================================
+  //
+  // Обычный sampler возвращает значение текстуры.
+  // Comparison sampler сравнивает значение с референсом и возвращает 0 или 1.
+  //
+  // compare: "less" означает:
+  //   - Если reference < texel: вернуть 1.0 (пиксель освещён)
+  //   - Если reference >= texel: вернуть 0.0 (пиксель в тени)
+  //
+  // В шейдере используется функция textureSampleCompare()
+  //
   const shadowSampler = gpu.createSampler({
     compare: "less",
   });
@@ -212,27 +275,42 @@ async function main() {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  // ============================================
-  // Shadow Data Uniform (lightViewProj для main pass)
-  // ============================================
-  const shadowDataSize = 16; // 1 mat4x4 = 16 floats
+  // ============================================================================
+  // SHADOW DATA UNIFORM - матрица lightViewProj для main pass
+  // ============================================================================
+  //
+  // Этот буфер передаётся в vertex shader основного прохода (shader.vert.wgsl).
+  // Содержит только матрицу lightViewProj (16 floats = 64 bytes).
+  //
+  // lightViewProj используется для преобразования позиции вершины
+  // в пространство источника света (для сравнения с shadow map).
+  //
+  const shadowDataSize = 16; // mat4x4 = 16 floats
   const shadowDataBuffer = new Float32Array(shadowDataSize);
   const shadowDataUbo = gpu.createBuffer({
     size: shadowDataBuffer.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  // ============================================
-  // Shadow Pass Uniforms (lightViewProj + model)
-  // ============================================
-  const shadowUniformSize = 32; // 2 mat4x4 = 32 floats
+  // ============================================================================
+  // SHADOW PASS UNIFORMS - данные для shadow pass
+  // ============================================================================
+  //
+  // Эти буферы используются в shadow.vert.wgsl для рендеринга в shadow map.
+  // Содержат:
+  //   - lightViewProj (16 floats) - матрица проекции+вида света
+  //   - model (16 floats) - матрица модели объекта
+  //
+  // Нужны отдельные буферы для каждого объекта, т.к. у них разные model матрицы.
+  //
+  const shadowUniformSize = 32; // 2 × mat4x4 = 32 floats
   const shadowUniformData = new Float32Array(shadowUniformSize);
   const shadowUbo = gpu.createBuffer({
     size: shadowUniformData.byteLength,
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
-  // Отдельный буфер для shadow pass пола
+  // Отдельный буфер для shadow pass пола (у пола своя model матрица)
   const shadowFloorUniformData = new Float32Array(shadowUniformSize);
   const shadowFloorUbo = gpu.createBuffer({
     size: shadowFloorUniformData.byteLength,
@@ -271,16 +349,33 @@ async function main() {
     ],
   });
 
-  // Layout для shadow data - group 1 (lightViewProj + shadow map + shadow sampler)
+  // ============================================================================
+  // SHADOW DATA BIND GROUP LAYOUT (group 1 в main pass)
+  // ============================================================================
+  //
+  // Этот layout описывает ресурсы для работы с тенями в основном рендеринге:
+  //   binding 0: lightViewProj матрица (для vertex shader)
+  //   binding 1: shadow map текстура (для fragment shader)
+  //   binding 2: comparison sampler (для fragment shader)
+  //
+  // sampleType: "depth" - указывает, что это depth текстура
+  // type: "comparison" - указывает, что sampler будет сравнивать значения
+  //
   const shadowDataBindGroupLayout = gpu.createBindGroupLayout({
     entries: [
-      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }, // lightViewProj
-      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } }, // shadow map
-      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } }, // shadow sampler
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } },
     ],
   });
 
-  // Layout для shadow pass (только uniform buffer)
+  // ============================================================================
+  // SHADOW PASS BIND GROUP LAYOUT (group 0 в shadow pass)
+  // ============================================================================
+  //
+  // Простой layout для shadow pass - только uniform buffer с матрицами.
+  // Fragment shader не используется, поэтому только VERTEX visibility.
+  //
   const shadowBindGroupLayout = gpu.createBindGroupLayout({
     entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }],
   });
@@ -411,28 +506,55 @@ async function main() {
     },
   });
 
-  // ============================================
-  // Shadow Pipeline (только depth, без color)
-  // ============================================
+  // ============================================================================
+  // SHADOW PIPELINE - пайплайн для рендеринга в shadow map
+  // ============================================================================
+  //
+  // Этот pipeline используется для ПЕРВОГО прохода - записи глубины в shadow map.
+  //
+  // КЛЮЧЕВЫЕ ОСОБЕННОСТИ:
+  // 1) НЕТ fragment shader - нам не нужен цвет, только глубина
+  // 2) depthBias - смещение глубины для предотвращения артефактов
+  // 3) cullMode: "none" - рендерим ВСЕ грани (иначе не будет теней от некоторых)
+  //
   const shadowPipeline = await gpu.createRenderPipelineAsync({
     layout: shadowPipelineLayout,
+
     vertex: {
       module: gpu.createShaderModule({ code: shadowVertWGSL }),
       entryPoint: "main",
-      buffers: [vertexBufferLayout],
+      buffers: [vertexBufferLayout], // Тот же формат вершин, что и в main pass
     },
-    // Без fragment shader — записываем только глубину
+
+    // БЕЗ fragment shader!
+    // WebGPU автоматически записывает gl_Position.z в depth buffer.
+    // Нам не нужен цвет - только глубина.
+
     primitive: {
       topology: "triangle-list",
-      cullMode: "none", // Рендерим все грани для корректных теней
-      frontFace: "cw",
+
+      // cullMode: "none" - НЕ отбрасываем грани!
+      // Если использовать "front" или "back", некоторые грани не попадут
+      // в shadow map и от них не будет теней.
+      cullMode: "none",
+
+      frontFace: "cw", // Clockwise = передняя грань
     },
+
     depthStencil: {
-      format: "depth32float",
-      depthWriteEnabled: true,
-      depthCompare: "less",
+      format: "depth32float", // Формат shadow map
+      depthWriteEnabled: true, // Записываем глубину
+      depthCompare: "less", // Ближние объекты перезаписывают дальние
+
+      // DEPTH BIAS - смещение глубины для борьбы с "shadow acne"
+      //
+      // Shadow acne - это артефакт, когда поверхность "затеняет сама себя"
+      // из-за ограниченной точности. Выглядит как полоски.
+      //
+      // depthBias добавляет небольшое смещение к глубине при записи,
+      // чтобы поверхность не попадала в собственную тень.
       depthBias: 4,
-      depthBiasSlopeScale: 2,
+      depthBiasSlopeScale: 2, // Дополнительное смещение для наклонных поверхностей
     },
   });
 
@@ -607,35 +729,74 @@ async function main() {
     );
     uniformData.set(dirColor, uniformOffsets.directionalColor);
 
-    // ============================================
-    // Вычисление lightViewProj для shadow mapping
-    // ============================================
-    // Позиция "виртуального источника" света (далеко в направлении, обратном dirVec)
-    const lightDistance = 15;
+    // ============================================================================
+    // ВЫЧИСЛЕНИЕ lightViewProj ДЛЯ SHADOW MAPPING
+    // ============================================================================
+    //
+    // lightViewProj - это матрица, которая преобразует координаты
+    // из мирового пространства в пространство "глазами источника света".
+    //
+    // lightViewProj = lightProjection × lightView
+    //
+    // Эта матрица используется дважды:
+    // 1) В shadow pass - для рендеринга глубины в shadow map
+    // 2) В main pass - для сравнения глубины пикселя с shadow map
+    //
+
+    // ШАГ 1: Вычисляем позицию "виртуального источника света"
+    //
+    // Направленный свет не имеет позиции (лучи параллельны, как от солнца).
+    // Но для построения матрицы вида нам нужна точка.
+    //
+    // Мы размещаем "камеру света" далеко в направлении, откуда светит свет.
+    // dirVec - направление лучей света, поэтому позиция = -dirVec * distance
+    //
+    const lightDistance = 15; // Расстояние до "позиции" света
     const lightPos: math.Vec3 = {
       x: -dirVec.x * lightDistance,
       y: -dirVec.y * lightDistance,
       z: -dirVec.z * lightDistance,
     };
+
+    // Свет смотрит на центр сцены
     const lightTarget: math.Vec3 = { x: 0, y: 0, z: 0 };
-    // Выбираем up вектор, который не совпадает с направлением света
+
+    // ШАГ 2: Выбираем вектор "вверх" для lookAt
+    //
+    // ПРОБЛЕМА: Если свет направлен вертикально (dirVec ≈ (0, 1, 0)),
+    // то up = (0, 1, 0) совпадёт с направлением взгляда и lookAt сломается.
+    //
+    // РЕШЕНИЕ: Если свет почти вертикальный, используем Z как "вверх".
+    //
     const absY = Math.abs(dirVec.y);
     const lightUp: math.Vec3 = absY > 0.99 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
 
-    // Ортографическая проекция для направленного источника
-    const shadowOrthoSize = 12;
+    // ШАГ 3: Создаём ортографическую проекцию
+    //
+    // Для направленного света используем ОРТОГРАФИЧЕСКУЮ проекцию,
+    // потому что лучи параллельны (нет перспективы).
+    //
+    // shadowOrthoSize определяет размер области, которая попадёт в shadow map.
+    // Слишком маленькая - тени обрежутся. Слишком большая - потеря качества.
+    //
+    const shadowOrthoSize = 12; // Размер области видимости света
     const lightProj = math.orthographic(
-      -shadowOrthoSize,
-      shadowOrthoSize,
-      -shadowOrthoSize,
-      shadowOrthoSize,
-      0.1,
-      30,
+      -shadowOrthoSize, // left
+      shadowOrthoSize, // right
+      -shadowOrthoSize, // bottom
+      shadowOrthoSize, // top
+      0.1, // near
+      30, // far
     );
+
+    // ШАГ 4: Создаём матрицу вида для света
     const lightView = math.lookAt(lightPos, lightTarget, lightUp);
+
+    // ШАГ 5: Комбинируем в одну матрицу
+    // lightViewProj = projection × view
     const lightViewProj = math.multiply(lightProj, lightView);
 
-    // Записываем lightViewProj в отдельный буфер для shadow data
+    // ШАГ 6: Записываем в uniform буфер для передачи в шейдеры
     shadowDataBuffer.set(lightViewProj, 0);
     gpu.queue.writeBuffer(shadowDataUbo, 0, shadowDataBuffer);
 
@@ -656,15 +817,27 @@ async function main() {
 
     gpu.queue.writeBuffer(ubo, 0, uniformData);
 
-    // ============================================
-    // Shadow Pass: рендеринг сцены в shadow map
-    // ============================================
-    // Обновляем shadow uniform для куба
-    shadowUniformData.set(lightViewProj, 0); // lightViewProj
-    shadowUniformData.set(cubeModel, 16); // model
+    // ============================================================================
+    // SHADOW PASS: рендеринг сцены в shadow map
+    // ============================================================================
+    //
+    // Это ПЕРВЫЙ проход рендеринга.
+    // Мы рисуем сцену "глазами источника света" и записываем только глубину.
+    //
+    // Результат - shadow map, который показывает:
+    // "Какие точки видит источник света?"
+    // Точки, которые он НЕ видит - находятся в тени!
+    //
+
+    // Обновляем uniform буферы для shadow pass
+    // Каждый объект имеет свою матрицу model, поэтому буферы отдельные
+
+    // Куб: lightViewProj (offset 0) + model (offset 16)
+    shadowUniformData.set(lightViewProj, 0);
+    shadowUniformData.set(cubeModel, 16);
     gpu.queue.writeBuffer(shadowUbo, 0, shadowUniformData);
 
-    // Обновляем shadow uniform для пола
+    // Пол: lightViewProj (offset 0) + model (offset 16)
     shadowFloorUniformData.set(lightViewProj, 0);
     shadowFloorUniformData.set(floorModel, 16);
     gpu.queue.writeBuffer(shadowFloorUbo, 0, shadowFloorUniformData);
@@ -673,17 +846,22 @@ async function main() {
     const viewTex = colorTex.createView();
     const encoder = gpu.createCommandEncoder();
 
-    // Shadow pass (рендеринг в shadow map)
+    // Начинаем shadow pass
+    //
+    // ВАЖНО: colorAttachments: [] - нет цветового вывода!
+    // Мы записываем ТОЛЬКО глубину в depthStencilAttachment.
+    //
     const shadowPass = encoder.beginRenderPass({
-      colorAttachments: [], // Нет цветового вывода
+      colorAttachments: [], // НЕТ цвета - только глубина!
       depthStencilAttachment: {
-        view: shadowMapView,
-        depthClearValue: 1.0,
-        depthLoadOp: "clear",
-        depthStoreOp: "store",
+        view: shadowMapView, // Рендерим в shadow map
+        depthClearValue: 1.0, // Очищаем глубину до 1.0 (максимально далеко)
+        depthLoadOp: "clear", // Очистить перед рендерингом
+        depthStoreOp: "store", // Сохранить результат
       },
     });
 
+    // Устанавливаем shadow pipeline (без fragment shader)
     shadowPass.setPipeline(shadowPipeline);
 
     // Рендерим куб в shadow map
@@ -700,20 +878,32 @@ async function main() {
 
     shadowPass.end();
 
-    // ============================================
-    // Main Pass: обычный рендеринг с тенями
-    // ============================================
+    // ============================================================================
+    // MAIN PASS: обычный рендеринг с тенями
+    // ============================================================================
+    //
+    // Это ВТОРОЙ проход рендеринга.
+    // Теперь мы рисуем сцену "глазами камеры" и используем shadow map
+    // для определения, какие пиксели находятся в тени.
+    //
+    // В fragment shader для каждого пикселя:
+    // 1) Преобразуем позицию в пространство света (используя lightViewProj)
+    // 2) Сравниваем глубину пикселя с глубиной в shadow map
+    // 3) Если пиксель дальше - он в тени, уменьшаем освещение
+    //
     const pass = encoder.beginRenderPass({
+      // Цветовой вывод - на экран
       colorAttachments: [
         {
-          view: viewTex,
-          clearValue: { r: 0.05, g: 0.05, b: 0.06, a: 1 },
+          view: viewTex, // Текстура экрана
+          clearValue: { r: 0.05, g: 0.05, b: 0.06, a: 1 }, // Цвет очистки (тёмный)
           loadOp: "clear",
           storeOp: "store",
         },
       ],
+      // Depth buffer для z-сортировки (чтобы ближние объекты перекрывали дальние)
       depthStencilAttachment: {
-        view: depthView,
+        view: depthView, // Depth текстура камеры (не shadow map!)
         depthClearValue: 1.0,
         depthLoadOp: "clear",
         depthStoreOp: "store",
@@ -721,11 +911,14 @@ async function main() {
     });
 
     // ============================================
-    // Рендеринг пола (использует отдельный floorUbo)
+    // Рендеринг пола
     // ============================================
-    // Копируем общие данные (projection, view, камера, освещение, lightViewProj) в floorUniformData
+    //
+    // ВАЖНО: Используем ДВА bind group:
+    //   group 0: данные объекта (uniform buffer, текстуры)
+    //   group 1: данные теней (lightViewProj, shadow map, sampler)
+    //
     floorUniformData.set(uniformData);
-    // Устанавливаем матрицу модели пола
     floorUniformData.set(floorModel, uniformOffsets.model);
     // lightViewProj уже скопирован из uniformData
     gpu.queue.writeBuffer(floorUbo, 0, floorUniformData);

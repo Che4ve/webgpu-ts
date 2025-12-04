@@ -1,3 +1,28 @@
+/**
+ * ============================================================================
+ * MAIN FRAGMENT SHADER (для куба)
+ * ============================================================================
+ * 
+ * Fragment shader выполняется для КАЖДОГО ПИКСЕЛЯ, который рисуется на экране.
+ * Его задача - определить финальный цвет пикселя.
+ * 
+ * Здесь реализовано:
+ * 1) Модель освещения Блинна-Фонга (Blinn-Phong)
+ * 2) Shadow Mapping с PCF фильтрацией
+ * 3) Текстурирование с specular map
+ * 
+ * МОДЕЛЬ БЛИННА-ФОНГА:
+ * Финальный цвет = Ambient + Diffuse + Specular
+ * 
+ * - Ambient: базовый свет (имитация отражённого света от окружения)
+ * - Diffuse: рассеянный свет (зависит от угла между нормалью и светом)
+ * - Specular: блик (зависит от угла отражения и позиции камеры)
+ */
+
+// ============================================================================
+// СТРУКТУРЫ ДАННЫХ (копируются из vertex shader)
+// ============================================================================
+
 struct Ambient {
   color : vec3<f32>,
   intensity : f32,
@@ -30,115 +55,238 @@ struct Scene {
   _padLights : vec3<f32>,
 };
 
+/**
+ * Точечный источник света.
+ * В отличие от направленного, имеет позицию и затухание с расстоянием.
+ */
 struct PointLight {
-  position : vec3<f32>,
-  intensity : f32,
-  color : vec3<f32>,
+  position : vec3<f32>,   // Позиция в мировых координатах
+  intensity : f32,        // Интенсивность
+  color : vec3<f32>,      // Цвет света
   _pad : f32,
 };
 
-const MAX_POINT_LIGHTS : u32 = 2u;
-const SHADOW_MAP_SIZE : f32 = 2048.0;
+// ============================================================================
+// КОНСТАНТЫ
+// ============================================================================
 
-@group(0) @binding(0) var<uniform> scene : Scene;
-@group(0) @binding(1) var tex : texture_2d<f32>;
-@group(0) @binding(2) var smp : sampler;
-@group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;
-@group(0) @binding(4) var specularMap : texture_2d<f32>;
-@group(0) @binding(5) var dirtSampler : sampler; // отдельный сэмплер для грязи (linear)
-@group(1) @binding(1) var shadowMap : texture_depth_2d;
-@group(1) @binding(2) var shadowSampler : sampler_comparison;
+const MAX_POINT_LIGHTS : u32 = 2u;      // Максимум точечных источников
+const SHADOW_MAP_SIZE : f32 = 2048.0;   // Размер shadow map в пикселях
+
+// ============================================================================
+// БИНДИНГИ (ресурсы из JavaScript)
+// ============================================================================
+
+// Group 0: основные данные
+@group(0) @binding(0) var<uniform> scene : Scene;            // Данные сцены
+@group(0) @binding(1) var tex : texture_2d<f32>;             // Текстура куба (diffuse)
+@group(0) @binding(2) var smp : sampler;                     // Сэмплер для текстуры
+@group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;  // Точечные источники
+@group(0) @binding(4) var specularMap : texture_2d<f32>;     // Specular map (грязь)
+@group(0) @binding(5) var dirtSampler : sampler;             // Сэмплер для specular map
+
+// Group 1: данные для теней
+@group(1) @binding(1) var shadowMap : texture_depth_2d;      // Shadow map (текстура глубины!)
+@group(1) @binding(2) var shadowSampler : sampler_comparison; // Сэмплер со сравнением
+
+// ============================================================================
+// ВХОДНЫЕ ДАННЫЕ (из vertex shader)
+// ============================================================================
 
 struct FSIn {
-  @location(0) worldPos : vec3<f32>,
-  @location(1) normal : vec3<f32>,
-  @location(2) uv     : vec2<f32>,
-  @location(3) shadowPos : vec4<f32>,
+  @location(0) worldPos : vec3<f32>,   // Позиция пикселя в мировых координатах
+  @location(1) normal : vec3<f32>,     // Нормаль поверхности (интерполированная!)
+  @location(2) uv     : vec2<f32>,     // Текстурные координаты
+  @location(3) shadowPos : vec4<f32>,  // Позиция в пространстве света
 };
 
+// ============================================================================
+// ФУНКЦИЯ РАСЧЁТА ТЕНЕЙ
+// ============================================================================
+
 /**
- * Вычисляет коэффициент тени с PCF (Percentage Closer Filtering).
- * Возвращает значение от 0.0 (полная тень) до 1.0 (полностью освещено).
+ * calculateShadow - определяет, находится ли пиксель в тени.
+ * 
+ * АЛГОРИТМ SHADOW MAPPING:
+ * 1) Преобразуем shadowPos в UV координаты shadow map
+ * 2) Сравниваем глубину пикселя с глубиной в shadow map
+ * 3) Если пиксель дальше - он в тени!
+ * 
+ * PCF (Percentage Closer Filtering):
+ * Вместо одного сравнения делаем 9 (сетка 3x3) и усредняем.
+ * Это даёт мягкие края теней вместо резких пиксельных границ.
+ * 
+ * @param shadowPos - позиция пикселя в clip space света
+ * @param N - нормаль поверхности
+ * @param L - направление к источнику света
+ * @return - коэффициент освещённости (0.0 = полная тень, 1.0 = полный свет)
  */
 fn calculateShadow(shadowPos : vec4<f32>, N : vec3<f32>, L : vec3<f32>) -> f32 {
-  // Преобразуем в NDC: делим на w
+  // ========================================
+  // ШАГ 1: Преобразование в NDC (Normalized Device Coordinates)
+  // ========================================
+  
+  // Делим на w (перспективное деление)
+  // После этого: x,y,z ∈ [-1, 1] для x,y и [0, 1] для z
   let projCoords = shadowPos.xyz / shadowPos.w;
   
-  // Преобразуем из [-1,1] в [0,1] для UV координат
-  // В WebGPU clip space X: [-1,1], Y: [-1,1], Z: [0,1]
+  // ========================================
+  // ШАГ 2: Преобразование в UV координаты текстуры
+  // ========================================
+  
+  // NDC: x,y ∈ [-1, 1]
+  // UV:  u,v ∈ [0, 1]
+  // Формула: uv = ndc * 0.5 + 0.5
+  // 
+  // ВАЖНО: Y инвертируем, потому что в текстуре Y растёт вниз!
   let shadowUV = vec2<f32>(
     projCoords.x * 0.5 + 0.5,
-    -projCoords.y * 0.5 + 0.5  // Инвертируем Y для текстурных координат
+    -projCoords.y * 0.5 + 0.5
   );
   
-  // Глубина текущего фрагмента в пространстве света
+  // Глубина пикселя с точки зрения света (0 = близко, 1 = далеко)
   let currentDepth = projCoords.z;
   
-  // Bias для предотвращения shadow acne
-  // Динамический bias на основе угла между нормалью и направлением света
+  // ========================================
+  // ШАГ 3: Shadow Bias
+  // ========================================
+  
+  // ПРОБЛЕМА "Shadow Acne":
+  // Из-за ограниченной точности shadow map, пиксели могут "затенять сами себя".
+  // Это создаёт полосатые артефакты на освещённых поверхностях.
+  // 
+  // РЕШЕНИЕ: Добавляем небольшое смещение (bias) к глубине.
+  // Bias зависит от угла - чем больше угол между нормалью и светом,
+  // тем больше bias нужен.
   let bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
   let depthWithBias = currentDepth - bias;
   
-  // Clamp UV к границам текстуры для избежания артефактов
+  // ========================================
+  // ШАГ 4: Clamp UV координаты
+  // ========================================
+  
+  // Ограничиваем UV, чтобы не выходить за границы текстуры
   let clampedUV = clamp(shadowUV, vec2<f32>(0.001), vec2<f32>(0.999));
   
-  // PCF 3x3 фильтрация для мягких теней
-  // textureSampleCompare должен вызываться в uniform control flow
+  // ========================================
+  // ШАГ 5: PCF фильтрация (3x3)
+  // ========================================
+  
+  // Размер одного текселя в UV координатах
   let texelSize = 1.0 / SHADOW_MAP_SIZE;
   
+  // Делаем 9 сравнений и усредняем результат.
+  // textureSampleCompare возвращает:
+  //   1.0 - если depthWithBias < глубина в shadow map (пиксель освещён)
+  //   0.0 - если depthWithBias >= глубина (пиксель в тени)
+  //
+  // ВАЖНО: В WGSL нельзя использовать textureSampleCompare в цикле
+  // из-за требования "uniform control flow", поэтому разворачиваем цикл вручную.
+  
   var shadow = 0.0;
+  
+  // Строка 1: y = -texelSize
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(-texelSize, -texelSize), depthWithBias);
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(0.0, -texelSize), depthWithBias);
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(texelSize, -texelSize), depthWithBias);
+  
+  // Строка 2: y = 0
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(-texelSize, 0.0), depthWithBias);
-  shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV, depthWithBias);
+  shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV, depthWithBias);  // Центр
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(texelSize, 0.0), depthWithBias);
+  
+  // Строка 3: y = texelSize
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(-texelSize, texelSize), depthWithBias);
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(0.0, texelSize), depthWithBias);
   shadow += textureSampleCompare(shadowMap, shadowSampler, clampedUV + vec2<f32>(texelSize, texelSize), depthWithBias);
+  
+  // Усредняем 9 результатов
   shadow /= 9.0;
   
-  // Проверяем, находится ли точка в пределах shadow map
-  // Используем select вместо if для uniform control flow
+  // ========================================
+  // ШАГ 6: Проверка границ
+  // ========================================
+  
+  // Если пиксель за пределами shadow map - считаем его освещённым.
+  // Используем select() вместо if, чтобы сохранить uniform control flow.
+  // select(falseValue, trueValue, condition) = condition ? trueValue : falseValue
   let inBounds = shadowUV.x >= 0.0 && shadowUV.x <= 1.0 && shadowUV.y >= 0.0 && shadowUV.y <= 1.0 && currentDepth <= 1.0;
   return select(1.0, shadow, inBounds);
 }
 
+// ============================================================================
+// ГЛАВНАЯ ФУНКЦИЯ
+// ============================================================================
+
 @fragment
 fn main(input : FSIn) -> @location(0) vec4<f32> {
+  // ========================================
+  // ПОДГОТОВКА ВЕКТОРОВ
+  // ========================================
+  
+  // N - нормаль поверхности (нормализуем, т.к. интерполяция могла изменить длину)
   let N = normalize(input.normal);
+  
+  // V - направление к камере (для расчёта бликов)
   let V = normalize(scene.cameraPos - input.worldPos);
 
-  var diffuseAcc = scene.ambient.color * scene.ambient.intensity;
-  var specAcc = vec3<f32>(0.0);
+  // Аккумуляторы для компонентов освещения
+  var diffuseAcc = scene.ambient.color * scene.ambient.intensity;  // Начинаем с ambient
+  var specAcc = vec3<f32>(0.0);  // Блики накапливаем отдельно
 
-  // Направленный свет с тенями
+  // ========================================
+  // НАПРАВЛЕННЫЙ СВЕТ + ТЕНИ
+  // ========================================
+  
+  // L - направление к источнику света (обратное направлению лучей)
   let dirL = normalize(-scene.directional.direction);
+  
+  // Диффузная составляющая: пропорциональна косинусу угла между N и L
+  // dot(N, L) = cos(angle). Если < 0, свет падает с обратной стороны.
   let dirDiffuse = max(dot(N, dirL), 0.0);
   
-  // Вычисляем коэффициент тени для направленного источника
+  // РАСЧЁТ ТЕНИ: определяем, виден ли этот пиксель из позиции света
   let shadowFactor = calculateShadow(input.shadowPos, N, dirL);
   
-  // Применяем тень к направленному освещению
+  // Добавляем диффузный свет с учётом тени
   diffuseAcc += scene.directional.color * (dirDiffuse * scene.directional.intensity * shadowFactor);
+  
+  // Specular (блик) по модели Блинна-Фонга
   if (dirDiffuse > 0.0) {
+    // H - половинный вектор между L и V
+    // Блинн заменил вектор отражения R на H - это быстрее вычислять
     let dirHalf = normalize(dirL + V);
+    
+    // Интенсивность блика: (N · H)^shininess
+    // Чем больше shininess, тем меньше и ярче блик
     let dirSpec = pow(max(dot(N, dirHalf), 0.0), scene.material.shininess);
+    
+    // Добавляем specular с учётом тени (в тени нет бликов!)
     specAcc += scene.directional.color * scene.material.specular * (dirSpec * scene.directional.intensity * shadowFactor);
   }
 
-  // Точечные источники (без теней)
+  // ========================================
+  // ТОЧЕЧНЫЕ ИСТОЧНИКИ (без теней)
+  // ========================================
+  
   let pointCount = min(u32(scene.pointLightCount + 0.5), MAX_POINT_LIGHTS);
+  
   for (var i : u32 = 0u; i < pointCount; i = i + 1u) {
     let light = pointLights[i];
+    
+    // Вектор от пикселя к источнику света
     let toLight = light.position - input.worldPos;
-    let dist = max(length(toLight), 1e-4);
-    let L = toLight / dist;
+    let dist = max(length(toLight), 1e-4);  // Защита от деления на 0
+    let L = toLight / dist;  // Нормализованное направление
+    
+    // Затухание: интенсивность / расстояние² (закон обратных квадратов)
     let attenuation = light.intensity / max(dist * dist, 1e-4);
 
+    // Диффузная составляющая
     let diff = max(dot(N, L), 0.0);
     diffuseAcc += light.color * (diff * attenuation);
 
+    // Specular составляющая
     if (diff > 0.0) {
       let h = normalize(L + V);
       let spec = pow(max(dot(N, h), 0.0), scene.material.shininess);
@@ -146,21 +294,38 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
     }
   }
 
+  // ========================================
+  // ТЕКСТУРИРОВАНИЕ
+  // ========================================
+  
+  // Сэмплируем diffuse текстуру (основной цвет)
   let texColor = textureSample(tex, smp, input.uv).rgb;
+  
+  // Базовый цвет = текстура * albedo материала
   let baseColor = texColor * scene.material.albedo;
 
-  // Сэмплируем specular map для модуляции отражения (грязные пятна)
-  // Используем отдельный dirtSampler с linear фильтрацией для плавных переходов
+  // ========================================
+  // SPECULAR MAP (грязь)
+  // ========================================
+  
+  // Specular map определяет, какие части поверхности блестят
+  // Тёмные области = грязь = меньше блеска и темнее
   let specularMask = textureSample(specularMap, dirtSampler, input.uv).r;
 
-  // Грязь затемняет поверхность: чистые места (1.0) -> 100%, грязные (0.0) -> 30%
+  // Грязь затемняет поверхность: 0.0 → 30% яркости, 1.0 → 100%
   let dirtDarkening = mix(0.3, 1.0, specularMask);
 
-  // Грязь почти полностью убирает отражение: чистые (1.0) -> 100%, грязные (0.0) -> 5%
+  // Грязь убирает блеск: 0.0 → 5% блеска, 1.0 → 100%
   let specularReduction = mix(0.05, 1.0, specularMask);
   let modulatedSpec = specAcc * specularReduction;
 
+  // ========================================
+  // ФИНАЛЬНЫЙ ЦВЕТ
+  // ========================================
+  
+  // Собираем всё вместе:
+  // (базовый цвет × освещение × грязь) + блики
   let finalColor = baseColor * diffuseAcc * dirtDarkening + modulatedSpec;
-  return vec4<f32>(finalColor, 1.0);
+  
+  return vec4<f32>(finalColor, 1.0);  // alpha = 1.0 (полностью непрозрачный)
 }
-
