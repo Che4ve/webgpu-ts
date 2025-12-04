@@ -17,6 +17,10 @@ struct Material {
   _pad : f32,
 };
 
+struct ShadowData {
+  lightViewProj : mat4x4<f32>,
+};
+
 struct Scene {
   projection : mat4x4<f32>,
   view : mat4x4<f32>,
@@ -31,6 +35,7 @@ struct Scene {
 };
 
 @group(0) @binding(0) var<uniform> scene : Scene;
+@group(1) @binding(0) var<uniform> shadowData : ShadowData;
 
 struct VSIn {
   @location(0) position : vec3<f32>,
@@ -43,6 +48,7 @@ struct VSOut {
   @location(0) worldPos       : vec3<f32>,
   @location(1) normal         : vec3<f32>,
   @location(2) uv             : vec2<f32>,
+  @location(3) shadowPos      : vec4<f32>,
 };
 
 @vertex
@@ -53,6 +59,9 @@ fn main(input : VSIn) -> VSOut {
   let viewPos = scene.view * worldPos;
   out.position = scene.projection * viewPos;
   out.worldPos = worldPos.xyz;
+
+  // Позиция в пространстве источника света для shadow mapping
+  out.shadowPos = shadowData.lightViewProj * worldPos;
 
   // Извлекаем столбцы M3 = R * S из model
   let c0 = scene.model[0].xyz; // столбец X

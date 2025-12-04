@@ -138,3 +138,30 @@ export function lookAt(eye: Vec3, target: Vec3, up: Vec3): Mat4 {
   m[14] = -dot(forward, eye);
   return m;
 }
+
+/**
+ * Ортографическая проекция для направленного источника света (shadow mapping).
+ * Использует левостороннюю систему координат (WebGPU/D3D).
+ */
+export function orthographic(
+  left: number,
+  right: number,
+  bottom: number,
+  top: number,
+  near: number,
+  far: number,
+): Mat4 {
+  const m = new Float32Array(16);
+  const lr = 1 / (right - left);
+  const bt = 1 / (top - bottom);
+  const nf = 1 / (far - near);
+
+  m[0] = 2 * lr;
+  m[5] = 2 * bt;
+  m[10] = nf; // Z в [0, 1] для WebGPU
+  m[12] = -(right + left) * lr;
+  m[13] = -(top + bottom) * bt;
+  m[14] = -near * nf;
+  m[15] = 1;
+  return m;
+}

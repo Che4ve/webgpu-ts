@@ -8,10 +8,12 @@ import lightVertWGSL from "./shaders/light_visualizer.vert.wgsl?raw";
 import cubeFragWGSL from "./shaders/shader.frag.wgsl?raw";
 import cubeVertWGSL from "./shaders/shader.vert.wgsl?raw";
 import envFragWGSL from "./shaders/environment.frag.wgsl?raw";
+import shadowVertWGSL from "./shaders/shadow.vert.wgsl?raw";
 import { createUIManager } from "./ui";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const maxPointLights = 2;
+const SHADOW_MAP_SIZE = 4096;
 
 const moveSpeed = 3.5;
 const sprintScale = 1.75;
@@ -95,6 +97,21 @@ async function main() {
     usage: GPUTextureUsage.RENDER_ATTACHMENT,
   });
   const depthView = depthTex.createView();
+
+  // ============================================
+  // Shadow Map: текстура глубины для теней от направленного источника
+  // ============================================
+  const shadowMapTexture = gpu.createTexture({
+    size: { width: SHADOW_MAP_SIZE, height: SHADOW_MAP_SIZE },
+    format: "depth32float",
+    usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
+  });
+  const shadowMapView = shadowMapTexture.createView();
+
+  // Comparison sampler для shadow mapping
+  const shadowSampler = gpu.createSampler({
+    compare: "less",
+  });
 
   // ============================================
   // Загрузка текстур
@@ -195,6 +212,33 @@ async function main() {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
+  // ============================================
+  // Shadow Data Uniform (lightViewProj для main pass)
+  // ============================================
+  const shadowDataSize = 16; // 1 mat4x4 = 16 floats
+  const shadowDataBuffer = new Float32Array(shadowDataSize);
+  const shadowDataUbo = gpu.createBuffer({
+    size: shadowDataBuffer.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  // ============================================
+  // Shadow Pass Uniforms (lightViewProj + model)
+  // ============================================
+  const shadowUniformSize = 32; // 2 mat4x4 = 32 floats
+  const shadowUniformData = new Float32Array(shadowUniformSize);
+  const shadowUbo = gpu.createBuffer({
+    size: shadowUniformData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
+  // Отдельный буфер для shadow pass пола
+  const shadowFloorUniformData = new Float32Array(shadowUniformSize);
+  const shadowFloorUbo = gpu.createBuffer({
+    size: shadowFloorUniformData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
   const pointLightData = new Float32Array(maxPointLights * 8);
   const pointLightBuffer = gpu.createBuffer({
     size: pointLightData.byteLength,
@@ -205,7 +249,7 @@ async function main() {
   // Bind Group Layouts
   // ============================================
 
-  // Layout для куба (с specular map и отдельным сэмплером для грязи)
+  // Layout для куба - group 0 (основные данные)
   const cubeBindGroupLayout = gpu.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
@@ -217,7 +261,7 @@ async function main() {
     ],
   });
 
-  // Layout для окружения (пол)
+  // Layout для окружения (пол) - group 0
   const envBindGroupLayout = gpu.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
@@ -227,11 +271,25 @@ async function main() {
     ],
   });
 
+  // Layout для shadow data - group 1 (lightViewProj + shadow map + shadow sampler)
+  const shadowDataBindGroupLayout = gpu.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }, // lightViewProj
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "depth" } }, // shadow map
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "comparison" } }, // shadow sampler
+    ],
+  });
+
+  // Layout для shadow pass (только uniform buffer)
+  const shadowBindGroupLayout = gpu.createBindGroupLayout({
+    entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: {} }],
+  });
+
   // ============================================
   // Bind Groups
   // ============================================
 
-  // Bind group для куба
+  // Bind group 0 для куба (основные данные)
   const cubeBindGroup = gpu.createBindGroup({
     layout: cubeBindGroupLayout,
     entries: [
@@ -240,11 +298,11 @@ async function main() {
       { binding: 2, resource: cubeSampler },
       { binding: 3, resource: { buffer: pointLightBuffer } },
       { binding: 4, resource: specularMapTexture.createView() },
-      { binding: 5, resource: dirtSampler }, // отдельный сэмплер для грязи (linear)
+      { binding: 5, resource: dirtSampler },
     ],
   });
 
-  // Bind group для пола (использует отдельный floorUbo)
+  // Bind group 0 для пола (основные данные)
   const floorBindGroup = gpu.createBindGroup({
     layout: envBindGroupLayout,
     entries: [
@@ -255,12 +313,43 @@ async function main() {
     ],
   });
 
+  // Bind group 1 для shadow data (общий для куба и пола)
+  const shadowDataBindGroup = gpu.createBindGroup({
+    layout: shadowDataBindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: shadowDataUbo } }, // lightViewProj
+      { binding: 1, resource: shadowMapView }, // shadow map
+      { binding: 2, resource: shadowSampler }, // comparison sampler
+    ],
+  });
+
+  // ============================================
+  // Shadow Pass Bind Groups
+  // ============================================
+  const shadowCubeBindGroup = gpu.createBindGroup({
+    layout: shadowBindGroupLayout,
+    entries: [{ binding: 0, resource: { buffer: shadowUbo } }],
+  });
+
+  const shadowFloorBindGroup = gpu.createBindGroup({
+    layout: shadowBindGroupLayout,
+    entries: [{ binding: 0, resource: { buffer: shadowFloorUbo } }],
+  });
+
   // ============================================
   // Pipeline Layouts
   // ============================================
 
-  const cubePipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [cubeBindGroupLayout] });
-  const envPipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [envBindGroupLayout] });
+  // Cube и Env pipeline используют два bind groups: group 0 (данные объекта) и group 1 (shadow data)
+  const cubePipelineLayout = gpu.createPipelineLayout({
+    bindGroupLayouts: [cubeBindGroupLayout, shadowDataBindGroupLayout],
+  });
+  const envPipelineLayout = gpu.createPipelineLayout({
+    bindGroupLayouts: [envBindGroupLayout, shadowDataBindGroupLayout],
+  });
+  const shadowPipelineLayout = gpu.createPipelineLayout({
+    bindGroupLayouts: [shadowBindGroupLayout],
+  });
 
   // Общая конфигурация vertex buffers
   const vertexBufferLayout: GPUVertexBufferLayout = {
@@ -319,6 +408,31 @@ async function main() {
       format: "depth24plus",
       depthWriteEnabled: true,
       depthCompare: "less-equal",
+    },
+  });
+
+  // ============================================
+  // Shadow Pipeline (только depth, без color)
+  // ============================================
+  const shadowPipeline = await gpu.createRenderPipelineAsync({
+    layout: shadowPipelineLayout,
+    vertex: {
+      module: gpu.createShaderModule({ code: shadowVertWGSL }),
+      entryPoint: "main",
+      buffers: [vertexBufferLayout],
+    },
+    // Без fragment shader — записываем только глубину
+    primitive: {
+      topology: "triangle-list",
+      cullMode: "none", // Рендерим все грани для корректных теней
+      frontFace: "cw",
+    },
+    depthStencil: {
+      format: "depth32float",
+      depthWriteEnabled: true,
+      depthCompare: "less",
+      depthBias: 4,
+      depthBiasSlopeScale: 2,
     },
   });
 
@@ -493,6 +607,38 @@ async function main() {
     );
     uniformData.set(dirColor, uniformOffsets.directionalColor);
 
+    // ============================================
+    // Вычисление lightViewProj для shadow mapping
+    // ============================================
+    // Позиция "виртуального источника" света (далеко в направлении, обратном dirVec)
+    const lightDistance = 15;
+    const lightPos: math.Vec3 = {
+      x: -dirVec.x * lightDistance,
+      y: -dirVec.y * lightDistance,
+      z: -dirVec.z * lightDistance,
+    };
+    const lightTarget: math.Vec3 = { x: 0, y: 0, z: 0 };
+    // Выбираем up вектор, который не совпадает с направлением света
+    const absY = Math.abs(dirVec.y);
+    const lightUp: math.Vec3 = absY > 0.99 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+
+    // Ортографическая проекция для направленного источника
+    const shadowOrthoSize = 12;
+    const lightProj = math.orthographic(
+      -shadowOrthoSize,
+      shadowOrthoSize,
+      -shadowOrthoSize,
+      shadowOrthoSize,
+      0.1,
+      30,
+    );
+    const lightView = math.lookAt(lightPos, lightTarget, lightUp);
+    const lightViewProj = math.multiply(lightProj, lightView);
+
+    // Записываем lightViewProj в отдельный буфер для shadow data
+    shadowDataBuffer.set(lightViewProj, 0);
+    gpu.queue.writeBuffer(shadowDataUbo, 0, shadowDataBuffer);
+
     const albedoColor = hexToRgb01(ui.matAlbedo.value);
     const specularColor = hexToRgb01(ui.matSpecular.value);
     uniformData.set(albedoColor, uniformOffsets.materialAlbedo);
@@ -510,9 +656,53 @@ async function main() {
 
     gpu.queue.writeBuffer(ubo, 0, uniformData);
 
+    // ============================================
+    // Shadow Pass: рендеринг сцены в shadow map
+    // ============================================
+    // Обновляем shadow uniform для куба
+    shadowUniformData.set(lightViewProj, 0); // lightViewProj
+    shadowUniformData.set(cubeModel, 16); // model
+    gpu.queue.writeBuffer(shadowUbo, 0, shadowUniformData);
+
+    // Обновляем shadow uniform для пола
+    shadowFloorUniformData.set(lightViewProj, 0);
+    shadowFloorUniformData.set(floorModel, 16);
+    gpu.queue.writeBuffer(shadowFloorUbo, 0, shadowFloorUniformData);
+
     const colorTex = context.getCurrentTexture();
     const viewTex = colorTex.createView();
     const encoder = gpu.createCommandEncoder();
+
+    // Shadow pass (рендеринг в shadow map)
+    const shadowPass = encoder.beginRenderPass({
+      colorAttachments: [], // Нет цветового вывода
+      depthStencilAttachment: {
+        view: shadowMapView,
+        depthClearValue: 1.0,
+        depthLoadOp: "clear",
+        depthStoreOp: "store",
+      },
+    });
+
+    shadowPass.setPipeline(shadowPipeline);
+
+    // Рендерим куб в shadow map
+    shadowPass.setVertexBuffer(0, cubeVbo);
+    shadowPass.setIndexBuffer(cubeIbo, "uint32");
+    shadowPass.setBindGroup(0, shadowCubeBindGroup);
+    shadowPass.drawIndexed(cubeIndices.length);
+
+    // Рендерим пол в shadow map
+    shadowPass.setVertexBuffer(0, floorVbo);
+    shadowPass.setIndexBuffer(floorIbo, "uint32");
+    shadowPass.setBindGroup(0, shadowFloorBindGroup);
+    shadowPass.drawIndexed(floorIndices.length);
+
+    shadowPass.end();
+
+    // ============================================
+    // Main Pass: обычный рендеринг с тенями
+    // ============================================
     const pass = encoder.beginRenderPass({
       colorAttachments: [
         {
@@ -533,16 +723,18 @@ async function main() {
     // ============================================
     // Рендеринг пола (использует отдельный floorUbo)
     // ============================================
-    // Копируем общие данные (projection, view, камера, освещение) в floorUniformData
+    // Копируем общие данные (projection, view, камера, освещение, lightViewProj) в floorUniformData
     floorUniformData.set(uniformData);
-    // Устанавливаем матрицу модели пола (identity — без трансформаций, пол в мировых координатах)
+    // Устанавливаем матрицу модели пола
     floorUniformData.set(floorModel, uniformOffsets.model);
+    // lightViewProj уже скопирован из uniformData
     gpu.queue.writeBuffer(floorUbo, 0, floorUniformData);
 
     pass.setPipeline(envPipeline);
     pass.setVertexBuffer(0, floorVbo);
     pass.setIndexBuffer(floorIbo, "uint32");
     pass.setBindGroup(0, floorBindGroup);
+    pass.setBindGroup(1, shadowDataBindGroup);
     pass.drawIndexed(floorIndices.length);
 
     // ============================================
@@ -555,6 +747,7 @@ async function main() {
     pass.setVertexBuffer(0, cubeVbo);
     pass.setIndexBuffer(cubeIbo, "uint32");
     pass.setBindGroup(0, cubeBindGroup);
+    pass.setBindGroup(1, shadowDataBindGroup);
     pass.drawIndexed(cubeIndices.length);
 
     // Рендерим визуализацию точечных источников света
