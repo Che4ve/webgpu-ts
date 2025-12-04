@@ -44,6 +44,7 @@ const MAX_POINT_LIGHTS : u32 = 2u;
 @group(0) @binding(2) var smp : sampler;
 @group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;
 @group(0) @binding(4) var specularMap : texture_2d<f32>;
+@group(0) @binding(5) var dirtSampler : sampler; // отдельный сэмплер для грязи (linear)
 
 struct FSIn {
   @location(0) worldPos : vec3<f32>,
@@ -90,10 +91,17 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
   let baseColor = texColor * scene.material.albedo;
 
   // Сэмплируем specular map для модуляции отражения (грязные пятна)
-  let specularMask = textureSample(specularMap, smp, input.uv).r;
-  let modulatedSpec = specAcc * specularMask;
+  // Используем отдельный dirtSampler с linear фильтрацией для плавных переходов
+  let specularMask = textureSample(specularMap, dirtSampler, input.uv).r;
 
-  let finalColor = baseColor * diffuseAcc + modulatedSpec;
+  // Грязь затемняет поверхность: чистые места (1.0) -> 100%, грязные (0.0) -> 30%
+  let dirtDarkening = mix(0.3, 1.0, specularMask);
+
+  // Грязь почти полностью убирает отражение: чистые (1.0) -> 100%, грязные (0.0) -> 5%
+  let specularReduction = mix(0.05, 1.0, specularMask);
+  let modulatedSpec = specAcc * specularReduction;
+
+  let finalColor = baseColor * diffuseAcc * dirtDarkening + modulatedSpec;
   return vec4<f32>(finalColor, 1.0);
 }
 

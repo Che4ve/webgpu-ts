@@ -9,7 +9,6 @@ import cubeFragWGSL from "./shaders/shader.frag.wgsl?raw";
 import cubeVertWGSL from "./shaders/shader.vert.wgsl?raw";
 import envFragWGSL from "./shaders/environment.frag.wgsl?raw";
 import { createUIManager } from "./ui";
-import { generateDirtSpecularMap, createTextureFromImageData } from "./textures";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const maxPointLights = 2;
@@ -107,9 +106,19 @@ async function main() {
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
 
-  // Specular map для куба (грязные пятна)
-  const specularMapData = generateDirtSpecularMap(64);
-  const specularMapTexture = createTextureFromImageData(gpu, specularMapData, false);
+  // Specular map для куба (грязные пятна из файла)
+  const { texture: specularMapTexture } = await loadTexture(
+    gpu,
+    new URL("../assets/dirt.png", import.meta.url).toString(),
+  );
+
+  // Отдельный сэмплер для грязи — linear фильтрация для плавных переходов
+  const dirtSampler = gpu.createSampler({
+    magFilter: "linear",
+    minFilter: "linear",
+    addressModeU: "repeat",
+    addressModeV: "repeat",
+  });
 
   // Текстура пола (wooden planks из файла)
   const { texture: floorTexture, sampler: floorSampler } = await loadTexture(
@@ -196,7 +205,7 @@ async function main() {
   // Bind Group Layouts
   // ============================================
 
-  // Layout для куба (с specular map)
+  // Layout для куба (с specular map и отдельным сэмплером для грязи)
   const cubeBindGroupLayout = gpu.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
@@ -204,6 +213,7 @@ async function main() {
       { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
       { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // specular map
+      { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }, // dirt sampler
     ],
   });
 
@@ -230,6 +240,7 @@ async function main() {
       { binding: 2, resource: cubeSampler },
       { binding: 3, resource: { buffer: pointLightBuffer } },
       { binding: 4, resource: specularMapTexture.createView() },
+      { binding: 5, resource: dirtSampler }, // отдельный сэмплер для грязи (linear)
     ],
   });
 
