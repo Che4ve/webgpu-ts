@@ -3,6 +3,67 @@ export type MeshData = {
   indices: Uint32Array;
 };
 
+/**
+ * Тип ориентации плоскости.
+ * - 'horizontal' — плоскость лежит горизонтально (XZ), нормаль направлена вверх (Y+)
+ * - 'vertical' — плоскость стоит вертикально (XY), нормаль направлена к камере (Z-)
+ */
+export type PlaneOrientation = "horizontal" | "vertical";
+
+/**
+ * Создаёт плоскость с заданными размерами и ориентацией.
+ * Вершины содержат position (vec3) + normal (vec3) + uv (vec2) = stride 32 bytes.
+ * UV координаты можно масштабировать для тайлинга текстуры.
+ *
+ * @param width - ширина плоскости
+ * @param height - высота (или глубина для horizontal) плоскости
+ * @param orientation - ориентация: 'horizontal' (пол) или 'vertical' (стена)
+ * @param uvScale - масштаб UV координат для тайлинга текстуры (по умолчанию 1)
+ * @returns MeshData с вершинами и индексами
+ */
+export function createPlane(
+  width: number,
+  height: number,
+  orientation: PlaneOrientation = "horizontal",
+  uvScale: number = 1,
+): MeshData {
+  const hw = width / 2;
+  const hh = height / 2;
+
+  let vertices: Float32Array;
+
+  if (orientation === "horizontal") {
+    // Горизонтальная плоскость (пол) — лежит в плоскости XZ, нормаль вверх (Y+)
+    // biome-ignore format: ignore
+    vertices = new Float32Array([
+      // position (x, y, z)    normal (nx, ny, nz)   uv (u, v)
+      -hw, 0, -hh,             0, 1, 0,              0, 0,
+       hw, 0, -hh,             0, 1, 0,              uvScale, 0,
+       hw, 0,  hh,             0, 1, 0,              uvScale, uvScale,
+      -hw, 0,  hh,             0, 1, 0,              0, uvScale,
+    ]);
+  } else {
+    // Вертикальная плоскость (стена) — стоит в плоскости XY, нормаль к камере (Z-)
+    // biome-ignore format: ignore
+    vertices = new Float32Array([
+      // position (x, y, z)    normal (nx, ny, nz)   uv (u, v)
+      -hw, -hh, 0,             0, 0, -1,             0, 0,
+       hw, -hh, 0,             0, 0, -1,             uvScale, 0,
+       hw,  hh, 0,             0, 0, -1,             uvScale, uvScale,
+      -hw,  hh, 0,             0, 0, -1,             0, uvScale,
+    ]);
+  }
+
+  // Индексы для двух треугольников (CCW для front-face)
+  // biome-ignore format: ignore
+  const indices = new Uint32Array([
+    0, 1, 2,
+    2, 3, 0,
+  ]);
+
+  return { vertices, indices };
+}
+
 // Cube with position + normal + uv (stride 32 bytes)
 export function createCube(size = 1): MeshData {
   const h = size / 2;

@@ -1,3 +1,8 @@
+/**
+ * Фрагментный шейдер для окружения (пол).
+ * Простой шейдер без specular map.
+ */
+
 struct Ambient {
   color : vec3<f32>,
   intensity : f32,
@@ -43,7 +48,6 @@ const MAX_POINT_LIGHTS : u32 = 2u;
 @group(0) @binding(1) var tex : texture_2d<f32>;
 @group(0) @binding(2) var smp : sampler;
 @group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;
-@group(0) @binding(4) var specularMap : texture_2d<f32>;
 
 struct FSIn {
   @location(0) worldPos : vec3<f32>,
@@ -59,6 +63,7 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
   var diffuseAcc = scene.ambient.color * scene.ambient.intensity;
   var specAcc = vec3<f32>(0.0);
 
+  // Directional light
   let dirL = normalize(-scene.directional.direction);
   let dirDiffuse = max(dot(N, dirL), 0.0);
   diffuseAcc += scene.directional.color * (dirDiffuse * scene.directional.intensity);
@@ -68,6 +73,7 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
     specAcc += scene.directional.color * scene.material.specular * (dirSpec * scene.directional.intensity);
   }
 
+  // Point lights
   let pointCount = min(u32(scene.pointLightCount + 0.5), MAX_POINT_LIGHTS);
   for (var i : u32 = 0u; i < pointCount; i = i + 1u) {
     let light = pointLights[i];
@@ -86,14 +92,10 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
     }
   }
 
+  // Сэмплируем текстуру
   let texColor = textureSample(tex, smp, input.uv).rgb;
   let baseColor = texColor * scene.material.albedo;
-
-  // Сэмплируем specular map для модуляции отражения (грязные пятна)
-  let specularMask = textureSample(specularMap, smp, input.uv).r;
-  let modulatedSpec = specAcc * specularMask;
-
-  let finalColor = baseColor * diffuseAcc + modulatedSpec;
+  let finalColor = baseColor * diffuseAcc + specAcc;
   return vec4<f32>(finalColor, 1.0);
 }
 

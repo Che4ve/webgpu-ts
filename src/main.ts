@@ -1,13 +1,15 @@
 import { CameraController, directionFromAngles } from "./camera";
 import { hexToRgb01 } from "./color";
-import { createCube, createSphere } from "./geometry";
+import { createCube, createPlane, createSphere } from "./geometry";
 import { createPointLights, updatePointLights } from "./lights";
 import * as math from "./math";
 import lightFragWGSL from "./shaders/light_visualizer.frag.wgsl?raw";
 import lightVertWGSL from "./shaders/light_visualizer.vert.wgsl?raw";
 import cubeFragWGSL from "./shaders/shader.frag.wgsl?raw";
 import cubeVertWGSL from "./shaders/shader.vert.wgsl?raw";
+import envFragWGSL from "./shaders/environment.frag.wgsl?raw";
 import { createUIManager } from "./ui";
+import { generateDirtSpecularMap, createTextureFromImageData } from "./textures";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
 const maxPointLights = 2;
@@ -95,28 +97,66 @@ async function main() {
   });
   const depthView = depthTex.createView();
 
-  const { texture, sampler } = await loadTexture(
+  // ============================================
+  // Загрузка текстур
+  // ============================================
+
+  // Текстура куба (cobblestone)
+  const { texture: cubeTexture, sampler: cubeSampler } = await loadTexture(
     gpu,
     new URL("../assets/cobblestone.png", import.meta.url).toString(),
   );
+
+  // Specular map для куба (грязные пятна)
+  const specularMapData = generateDirtSpecularMap(64);
+  const specularMapTexture = createTextureFromImageData(gpu, specularMapData, false);
+
+  // Текстура пола (wooden planks из файла)
+  const { texture: floorTexture, sampler: floorSampler } = await loadTexture(
+    gpu,
+    new URL("../assets/woodenPlank.png", import.meta.url).toString(),
+  );
+
+  // ============================================
+  // Создание геометрии
+  // ============================================
 
   const cube = createCube(1);
   const cubeVertices = new Float32Array(cube.vertices);
   const cubeIndices = new Uint32Array(cube.indices);
 
-  const vbo = gpu.createBuffer({
+  // Пол — большая горизонтальная плоскость под кубом
+  const floor = createPlane(20, 20, "horizontal", 10); // 10x тайлинг текстуры
+  const floorVertices = new Float32Array(floor.vertices);
+  const floorIndices = new Uint32Array(floor.indices);
+
+  // Буферы для куба
+  const cubeVbo = gpu.createBuffer({
     size: cubeVertices.byteLength,
     usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: false,
   });
-  gpu.queue.writeBuffer(vbo, 0, cubeVertices);
+  gpu.queue.writeBuffer(cubeVbo, 0, cubeVertices);
 
-  const ibo = gpu.createBuffer({
+  const cubeIbo = gpu.createBuffer({
     size: cubeIndices.byteLength,
     usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
     mappedAtCreation: false,
   });
-  gpu.queue.writeBuffer(ibo, 0, cubeIndices);
+  gpu.queue.writeBuffer(cubeIbo, 0, cubeIndices);
+
+  // Буферы для пола
+  const floorVbo = gpu.createBuffer({
+    size: floorVertices.byteLength,
+    usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
+  });
+  gpu.queue.writeBuffer(floorVbo, 0, floorVertices);
+
+  const floorIbo = gpu.createBuffer({
+    size: floorIndices.byteLength,
+    usage: GPUBufferUsage.INDEX | GPUBufferUsage.COPY_DST,
+  });
+  gpu.queue.writeBuffer(floorIbo, 0, floorIndices);
 
   // 3 матрицы + камера + ambient + directional + material + количество точечных (+ паддинг)
   const uniformOffsets = {
@@ -139,13 +179,36 @@ async function main() {
     usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
   });
 
+  // Отдельный UBO для пола (чтобы матрица модели не перезаписывалась)
+  const floorUniformData = new Float32Array(80);
+  const floorUbo = gpu.createBuffer({
+    size: floorUniformData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
   const pointLightData = new Float32Array(maxPointLights * 8);
   const pointLightBuffer = gpu.createBuffer({
     size: pointLightData.byteLength,
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
-  const bindGroupLayout = gpu.createBindGroupLayout({
+  // ============================================
+  // Bind Group Layouts
+  // ============================================
+
+  // Layout для куба (с specular map)
+  const cubeBindGroupLayout = gpu.createBindGroupLayout({
+    entries: [
+      { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+      { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
+      { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
+      { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+      { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // specular map
+    ],
+  });
+
+  // Layout для окружения (пол)
+  const envBindGroupLayout = gpu.createBindGroupLayout({
     entries: [
       { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
       { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
@@ -153,36 +216,86 @@ async function main() {
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
     ],
   });
-  const bindGroup = gpu.createBindGroup({
-    layout: bindGroupLayout,
+
+  // ============================================
+  // Bind Groups
+  // ============================================
+
+  // Bind group для куба
+  const cubeBindGroup = gpu.createBindGroup({
+    layout: cubeBindGroupLayout,
     entries: [
       { binding: 0, resource: { buffer: ubo } },
-      { binding: 1, resource: texture.createView() },
-      { binding: 2, resource: sampler },
+      { binding: 1, resource: cubeTexture.createView() },
+      { binding: 2, resource: cubeSampler },
+      { binding: 3, resource: { buffer: pointLightBuffer } },
+      { binding: 4, resource: specularMapTexture.createView() },
+    ],
+  });
+
+  // Bind group для пола (использует отдельный floorUbo)
+  const floorBindGroup = gpu.createBindGroup({
+    layout: envBindGroupLayout,
+    entries: [
+      { binding: 0, resource: { buffer: floorUbo } },
+      { binding: 1, resource: floorTexture.createView() },
+      { binding: 2, resource: floorSampler },
       { binding: 3, resource: { buffer: pointLightBuffer } },
     ],
   });
 
-  const pipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+  // ============================================
+  // Pipeline Layouts
+  // ============================================
 
-  const pipeline = await gpu.createRenderPipelineAsync({
-    layout: pipelineLayout,
+  const cubePipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [cubeBindGroupLayout] });
+  const envPipelineLayout = gpu.createPipelineLayout({ bindGroupLayouts: [envBindGroupLayout] });
+
+  // Общая конфигурация vertex buffers
+  const vertexBufferLayout: GPUVertexBufferLayout = {
+    arrayStride: 32,
+    attributes: [
+      { shaderLocation: 0, offset: 0, format: "float32x3" }, // position
+      { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
+      { shaderLocation: 2, offset: 24, format: "float32x2" }, // uv
+    ],
+  };
+
+  // Pipeline для куба (с specular map)
+  const cubePipeline = await gpu.createRenderPipelineAsync({
+    layout: cubePipelineLayout,
     vertex: {
       module: gpu.createShaderModule({ code: cubeVertWGSL }),
       entryPoint: "main",
-      buffers: [
-        {
-          arrayStride: 32,
-          attributes: [
-            { shaderLocation: 0, offset: 0, format: "float32x3" }, // position
-            { shaderLocation: 1, offset: 12, format: "float32x3" }, // normal
-            { shaderLocation: 2, offset: 24, format: "float32x2" }, // uv
-          ],
-        },
-      ],
+      buffers: [vertexBufferLayout],
     },
     fragment: {
       module: gpu.createShaderModule({ code: cubeFragWGSL }),
+      entryPoint: "main",
+      targets: [{ format }],
+    },
+    primitive: {
+      topology: "triangle-list",
+      cullMode: "none",
+      frontFace: "cw",
+    },
+    depthStencil: {
+      format: "depth24plus",
+      depthWriteEnabled: true,
+      depthCompare: "less-equal",
+    },
+  });
+
+  // Pipeline для окружения (пол и стены)
+  const envPipeline = await gpu.createRenderPipelineAsync({
+    layout: envPipelineLayout,
+    vertex: {
+      module: gpu.createShaderModule({ code: cubeVertWGSL }), // тот же vertex shader
+      entryPoint: "main",
+      buffers: [vertexBufferLayout],
+    },
+    fragment: {
+      module: gpu.createShaderModule({ code: envFragWGSL }),
       entryPoint: "main",
       targets: [{ format }],
     },
@@ -324,10 +437,20 @@ async function main() {
       math.rotationAxisY(rotation),
       math.rotationAxisX(-Math.PI / 7),
     );
-    const model = math.multiply(
-      math.translation({ x: 0, y: 0, z: Number.parseFloat(ui.tz.value) }),
+    const cubeModel = math.multiply(
+      math.translation({ x: 0, y: 0.5, z: Number.parseFloat(ui.tz.value) }),
       math.multiply(rotationMat, scaleMat),
     );
+
+    // biome-ignore format: ignore
+    // Матрица модели для пола (лежит под кубом)
+    // Куб с центром на y=0.5 имеет нижнюю грань на y=0, поэтому пол на y=0
+    const floorModel: math.Mat4 = new Float32Array([
+      1, 0, 0, 0,
+      0, 1, 0, 0,
+      0, 0, 1, 0,
+      0, -1, 2, 1,
+    ]);
 
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
     const view = math.lookAt(camera.state.position, math.add(camera.state.position, forward), {
@@ -338,7 +461,7 @@ async function main() {
 
     uniformData.set(proj, uniformOffsets.projection);
     uniformData.set(view, uniformOffsets.view);
-    uniformData.set(model, uniformOffsets.model);
+    // Модель будет обновляться для каждого объекта
 
     uniformData[uniformOffsets.cameraPos + 0] = camera.state.position.x;
     uniformData[uniformOffsets.cameraPos + 1] = camera.state.position.y;
@@ -396,10 +519,31 @@ async function main() {
       },
     });
 
-    pass.setPipeline(pipeline);
-    pass.setVertexBuffer(0, vbo);
-    pass.setIndexBuffer(ibo, "uint32");
-    pass.setBindGroup(0, bindGroup);
+    // ============================================
+    // Рендеринг пола (использует отдельный floorUbo)
+    // ============================================
+    // Копируем общие данные (projection, view, камера, освещение) в floorUniformData
+    floorUniformData.set(uniformData);
+    // Устанавливаем матрицу модели пола (identity — без трансформаций, пол в мировых координатах)
+    floorUniformData.set(floorModel, uniformOffsets.model);
+    gpu.queue.writeBuffer(floorUbo, 0, floorUniformData);
+
+    pass.setPipeline(envPipeline);
+    pass.setVertexBuffer(0, floorVbo);
+    pass.setIndexBuffer(floorIbo, "uint32");
+    pass.setBindGroup(0, floorBindGroup);
+    pass.drawIndexed(floorIndices.length);
+
+    // ============================================
+    // Рендеринг куба
+    // ============================================
+    uniformData.set(cubeModel, uniformOffsets.model);
+    gpu.queue.writeBuffer(ubo, 0, uniformData);
+
+    pass.setPipeline(cubePipeline);
+    pass.setVertexBuffer(0, cubeVbo);
+    pass.setIndexBuffer(cubeIbo, "uint32");
+    pass.setBindGroup(0, cubeBindGroup);
     pass.drawIndexed(cubeIndices.length);
 
     // Рендерим визуализацию точечных источников света
