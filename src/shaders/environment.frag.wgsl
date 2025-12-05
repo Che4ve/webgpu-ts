@@ -55,7 +55,21 @@ struct PointLight {
   _pad : f32,
 };
 
-const MAX_POINT_LIGHTS : u32 = 2u;
+/**
+ * Прожектор (Spotlight).
+ */
+struct SpotLight {
+  position : vec3<f32>,
+  intensity : f32,
+  direction : vec3<f32>,
+  innerCosAngle : f32,
+  color : vec3<f32>,
+  outerCosAngle : f32,
+  enabled : f32,
+  _pad : vec3<f32>,
+};
+
+const MAX_POINT_LIGHTS : u32 = 1u;
 const SHADOW_MAP_SIZE : f32 = 2048.0;
 
 // ============================================================================
@@ -67,8 +81,9 @@ const SHADOW_MAP_SIZE : f32 = 2048.0;
 @group(0) @binding(1) var tex : texture_2d<f32>;             // Текстура пола (доски)
 @group(0) @binding(2) var smp : sampler;                     // Сэмплер
 @group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;
+@group(0) @binding(4) var<uniform> spotLight : SpotLight;    // Прожектор
 
-// Group 1: данные для теней (те же, что у куба)
+// Group 1: данные для теней
 @group(1) @binding(1) var shadowMap : texture_depth_2d;
 @group(1) @binding(2) var shadowSampler : sampler_comparison;
 
@@ -173,6 +188,29 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
       let h = normalize(L + V);
       let spec = pow(max(dot(N, h), 0.0), scene.material.shininess);
       specAcc += light.color * scene.material.specular * (spec * attenuation);
+    }
+  }
+
+  // ========================================
+  // ПРОЖЕКТОР (SPOTLIGHT)
+  // ========================================
+  if (spotLight.enabled > 0.5) {
+    let toPixel = input.worldPos - spotLight.position;
+    let dist = max(length(toPixel), 1e-4);
+    let L = -normalize(toPixel);
+    
+    let spotCos = dot(normalize(toPixel), spotLight.direction);
+    let spotlightFactor = smoothstep(spotLight.outerCosAngle, spotLight.innerCosAngle, spotCos);
+    let attenuation = spotLight.intensity / max(dist * dist, 1e-4);
+    let finalAttenuation = attenuation * spotlightFactor;
+    
+    let diff = max(dot(N, L), 0.0);
+    diffuseAcc += spotLight.color * (diff * finalAttenuation);
+    
+    if (diff > 0.0) {
+      let h = normalize(L + V);
+      let spec = pow(max(dot(N, h), 0.0), scene.material.shininess);
+      specAcc += spotLight.color * scene.material.specular * (spec * finalAttenuation);
     }
   }
 

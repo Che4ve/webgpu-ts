@@ -66,11 +66,34 @@ struct PointLight {
   _pad : f32,
 };
 
+/**
+ * Прожектор (Spotlight).
+ * Точечный источник с ограниченным конусом освещения.
+ * 
+ * Принцип работы:
+ * 1) Вычисляем угол между направлением прожектора и направлением к пикселю
+ * 2) Если угол меньше innerConeAngle - полная яркость
+ * 3) Если угол между inner и outer - плавное затухание
+ * 4) Если угол больше outerConeAngle - нет света
+ * 
+ * ВАЖНО: Храним КОСИНУСЫ углов, т.к. сравниваем с dot product!
+ */
+struct SpotLight {
+  position : vec3<f32>,       // Позиция прожектора
+  intensity : f32,            // Интенсивность
+  direction : vec3<f32>,      // Направление (куда светит)
+  innerCosAngle : f32,        // cos(innerConeAngle) - полная яркость
+  color : vec3<f32>,          // Цвет света
+  outerCosAngle : f32,        // cos(outerConeAngle) - край конуса
+  enabled : f32,              // 1.0 = включен, 0.0 = выключен
+  _pad : vec3<f32>,
+};
+
 // ============================================================================
 // КОНСТАНТЫ
 // ============================================================================
 
-const MAX_POINT_LIGHTS : u32 = 2u;      // Максимум точечных источников
+const MAX_POINT_LIGHTS : u32 = 1u;      // Максимум точечных источников (теперь 1)
 const SHADOW_MAP_SIZE : f32 = 2048.0;   // Размер shadow map в пикселях
 
 // ============================================================================
@@ -84,6 +107,7 @@ const SHADOW_MAP_SIZE : f32 = 2048.0;   // Размер shadow map в пиксе
 @group(0) @binding(3) var<storage, read> pointLights : array<PointLight, MAX_POINT_LIGHTS>;  // Точечные источники
 @group(0) @binding(4) var specularMap : texture_2d<f32>;     // Specular map (грязь)
 @group(0) @binding(5) var dirtSampler : sampler;             // Сэмплер для specular map
+@group(0) @binding(6) var<uniform> spotLight : SpotLight;    // Прожектор
 
 // Group 1: данные для теней
 @group(1) @binding(1) var shadowMap : texture_depth_2d;      // Shadow map (текстура глубины!)
@@ -291,6 +315,52 @@ fn main(input : FSIn) -> @location(0) vec4<f32> {
       let h = normalize(L + V);
       let spec = pow(max(dot(N, h), 0.0), scene.material.shininess);
       specAcc += light.color * scene.material.specular * (spec * attenuation);
+    }
+  }
+
+  // ========================================
+  // ПРОЖЕКТОР (SPOTLIGHT)
+  // ========================================
+  //
+  // Прожектор = точечный источник + ограничение по конусу
+  //
+  if (spotLight.enabled > 0.5) {
+    // Вектор от прожектора к пикселю
+    let toPixel = input.worldPos - spotLight.position;
+    let dist = max(length(toPixel), 1e-4);
+    let L = -normalize(toPixel);  // Направление К источнику
+    
+    // Вычисляем косинус угла между направлением прожектора и направлением к пикселю
+    // spotLight.direction - куда светит прожектор
+    // toPixel/dist - куда находится пиксель относительно прожектора
+    let spotCos = dot(normalize(toPixel), spotLight.direction);
+    
+    // Вычисляем коэффициент затухания по конусу
+    // smoothstep создаёт плавный переход между outer и inner углами
+    //
+    // Если spotCos > innerCosAngle: spotlight = 1.0 (полная яркость)
+    // Если spotCos < outerCosAngle: spotlight = 0.0 (вне конуса)
+    // Между ними: плавный переход
+    //
+    // ВНИМАНИЕ: cos убывает с ростом угла! cos(0°)=1, cos(90°)=0
+    // Поэтому innerCosAngle > outerCosAngle
+    let spotlightFactor = smoothstep(spotLight.outerCosAngle, spotLight.innerCosAngle, spotCos);
+    
+    // Затухание с расстоянием (как у точечного источника)
+    let attenuation = spotLight.intensity / max(dist * dist, 1e-4);
+    
+    // Финальная интенсивность = затухание × коэффициент конуса
+    let finalAttenuation = attenuation * spotlightFactor;
+    
+    // Диффузная составляющая
+    let diff = max(dot(N, L), 0.0);
+    diffuseAcc += spotLight.color * (diff * finalAttenuation);
+    
+    // Specular составляющая
+    if (diff > 0.0) {
+      let h = normalize(L + V);
+      let spec = pow(max(dot(N, h), 0.0), scene.material.shininess);
+      specAcc += spotLight.color * scene.material.specular * (spec * finalAttenuation);
     }
   }
 

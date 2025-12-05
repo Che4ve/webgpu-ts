@@ -17,15 +17,15 @@
           <div class="subgrid two-col">
             <div class="card">
               <h4>Ambient</h4>
-              <label>Color <input id="ambient-color" type="color" value="#1f212a"></label>
+              <label>Color <input id="ambient-color" type="color" value="#a09cde"></label>
               <label>Intensity <input id="ambient-intensity" type="range" min="0" max="2" step="0.01" value="0.35"></label>
             </div>
             <div class="card">
               <h4>Directional</h4>
-              <label>Yaw <input id="dir-yaw" type="range" min="-3.14159" max="3.14159" step="0.01" value="2.2"></label>
+              <label>Yaw <input id="dir-yaw" type="range" min="-3.14159" max="3.14159" step="0.01" value="0.5"></label>
               <label>Pitch <input id="dir-pitch" type="range" min="-1.4" max="1.4" step="0.01" value="-0.35"></label>
-              <label>Color <input id="dir-color" type="color" value="#ffffff"></label>
-              <label>Intensity <input id="dir-intensity" type="range" min="0" max="4" step="0.01" value="1.3"></label>
+              <label>Color <input id="dir-color" type="color" value="#ffeccc"></label>
+              <label>Intensity <input id="dir-intensity" type="range" min="0" max="4" step="0.01" value="0.5"></label>
             </div>
           </div>
 
@@ -37,11 +37,10 @@
               <label>Shininess <input id="mat-shininess" type="range" min="1" max="128" step="1" value="64"></label>
             </div>
             <div class="card">
-              <h4>Point lights</h4>
-              <label>Count <input id="point-count" type="range" min="0" max="2" step="1" value="2"></label>
+              <h4>Point light</h4>
+              <label><input id="point-enabled" type="checkbox" checked> Включен</label>
               <div class="point-grid">
                 <div class="point">
-                  <div class="point-title">P1</div>
                   <label>Color <input id="p0-color" type="color" value="#ffc48c"></label>
                   <label>Intensity <input id="p0-intensity" type="range" min="0" max="30" step="0.1" value="2"></label>
                   <div class="triple">
@@ -50,17 +49,29 @@
                     <label>Z <input id="p0-z" type="range" min="-4" max="4" step="0.1" value="1.8"></label>
                   </div>
                 </div>
-                <div class="point">
-                  <div class="point-title">P2</div>
-                  <label>Color <input id="p1-color" type="color" value="#7fd3ff"></label>
-                  <label>Intensity <input id="p1-intensity" type="range" min="0" max="30" step="0.1" value="4"></label>
-                  <div class="triple">
-                    <label>X <input id="p1-x" type="range" min="-4" max="4" step="0.1" value="-2.2"></label>
-                    <label>Y <input id="p1-y" type="range" min="0" max="3" step="0.1" value="1.2"></label>
-                    <label>Z <input id="p1-z" type="range" min="-4" max="4" step="0.1" value="1.4"></label>
-                  </div>
-                </div>
               </div>
+            </div>
+          </div>
+
+          <div class="subgrid">
+            <div class="card">
+              <h4>Spotlight (прожектор)</h4>
+              <label><input id="spot-enabled" type="checkbox" checked> Включен</label>
+              <label>Color <input id="spot-color" type="color" value="#294cff"></label>
+              <label>Intensity <input id="spot-intensity" type="range" min="0" max="50" step="0.5" value="20"></label>
+              <div class="triple">
+                <label>X <input id="spot-x" type="range" min="-4" max="4" step="0.1" value="-3.5"></label>
+                <label>Y <input id="spot-y" type="range" min="0" max="5" step="0.1" value="0.5"></label>
+                <label>Z <input id="spot-z" type="range" min="-4" max="6" step="0.1" value="4"></label>
+              </div>
+              <p class="note">Direction (направление):</p>
+              <div class="triple">
+                <label>X <input id="spot-dir-x" type="range" min="-1" max="1" step="0.05" value="0.7"></label>
+                <label>Y <input id="spot-dir-y" type="range" min="-1" max="1" step="0.05" value="-0.3"></label>
+                <label>Z <input id="spot-dir-z" type="range" min="-1" max="1" step="0.05" value="-0.3"></label>
+              </div>
+              <label>Inner angle (°) <input id="spot-inner" type="range" min="5" max="45" step="1" value="20"></label>
+              <label>Outer angle (°) <input id="spot-outer" type="range" min="10" max="60" step="1" value="35"></label>
             </div>
           </div>
         </fieldset>

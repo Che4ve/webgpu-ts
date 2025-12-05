@@ -33,7 +33,8 @@
 import { CameraController, directionFromAngles } from "./camera";
 import { hexToRgb01 } from "./color";
 import { createCube, createPlane, createSphere } from "./geometry";
-import { createPointLights, updatePointLights } from "./lights";
+import { createPointLights, createSpotLight, updatePointLights, updateSpotLight } from "./lights";
+import type { LightControls } from "./lights";
 import * as math from "./math";
 import lightFragWGSL from "./shaders/light_visualizer.frag.wgsl?raw";
 import lightVertWGSL from "./shaders/light_visualizer.vert.wgsl?raw";
@@ -44,7 +45,7 @@ import shadowVertWGSL from "./shaders/shadow.vert.wgsl?raw"; // Шейдер д�
 import { createUIManager } from "./ui";
 
 const canvas = document.getElementById("gfx") as HTMLCanvasElement;
-const maxPointLights = 2;
+const maxPointLights = 1; // Один точечный источник
 
 /**
  * Размер shadow map в пикселях.
@@ -83,6 +84,7 @@ ui.spin.addEventListener("change", () => {
 });
 
 const pointLights = createPointLights(maxPointLights);
+const spotLight = createSpotLight(); // Прожектор
 
 async function loadTexture(gpuDevice: GPUDevice, url: string) {
   const img = new Image();
@@ -323,6 +325,28 @@ async function main() {
     usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST,
   });
 
+  // ============================================================================
+  // SPOTLIGHT BUFFER - буфер для прожектора
+  // ============================================================================
+  // ВАЖНО: В WGSL vec3 требует выравнивания 16 байт!
+  // Структура в памяти (с учётом выравнивания):
+  //   [0-2]: position (vec3)     offset 0,  align 16
+  //   [3]: intensity (f32)       offset 12
+  //   [4-6]: direction (vec3)    offset 16, align 16
+  //   [7]: innerCosAngle (f32)   offset 28
+  //   [8-10]: color (vec3)       offset 32, align 16
+  //   [11]: outerCosAngle (f32)  offset 44
+  //   [12]: enabled (f32)        offset 48
+  //   [13-15]: padding           offset 52
+  //   [16-18]: _pad (vec3)       offset 64, align 16  ← требует выравнивания!
+  //   [19]: padding              offset 76
+  // Итого: 80 bytes = 20 floats
+  const spotLightData = new Float32Array(20);
+  const spotLightBuffer = gpu.createBuffer({
+    size: spotLightData.byteLength,
+    usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+  });
+
   // ============================================
   // Bind Group Layouts
   // ============================================
@@ -336,6 +360,7 @@ async function main() {
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
       { binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }, // specular map
       { binding: 5, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } }, // dirt sampler
+      { binding: 6, visibility: GPUShaderStage.FRAGMENT, buffer: {} }, // spotlight
     ],
   });
 
@@ -346,6 +371,7 @@ async function main() {
       { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } },
       { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
       { binding: 3, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+      { binding: 4, visibility: GPUShaderStage.FRAGMENT, buffer: {} }, // spotlight
     ],
   });
 
@@ -394,6 +420,7 @@ async function main() {
       { binding: 3, resource: { buffer: pointLightBuffer } },
       { binding: 4, resource: specularMapTexture.createView() },
       { binding: 5, resource: dirtSampler },
+      { binding: 6, resource: { buffer: spotLightBuffer } },
     ],
   });
 
@@ -405,6 +432,7 @@ async function main() {
       { binding: 1, resource: floorTexture.createView() },
       { binding: 2, resource: floorSampler },
       { binding: 3, resource: { buffer: pointLightBuffer } },
+      { binding: 4, resource: { buffer: spotLightBuffer } },
     ],
   });
 
@@ -806,14 +834,26 @@ async function main() {
     uniformData[uniformOffsets.materialAlbedo + 3] = Number.parseFloat(ui.matShininess.value);
     uniformData.set(specularColor, uniformOffsets.materialSpecular);
 
-    const activePointLights = updatePointLights(
-      now,
-      { count: ui.pointCount, entries: ui.points },
-      pointLights,
-      pointLightData,
-    );
+    // ========================================
+    // ОБНОВЛЕНИЕ ИСТОЧНИКОВ СВЕТА
+    // ========================================
+
+    // Объект с UI-элементами для источников света
+    const lightControls: LightControls = {
+      pointEnabled: ui.pointEnabled,
+      points: ui.points,
+      spot: ui.spot,
+      spotEnabled: ui.spotEnabled,
+    };
+
+    // Обновляем точечные источники
+    const activePointLights = updatePointLights(now, lightControls, pointLights, pointLightData);
     uniformData[uniformOffsets.pointCount] = activePointLights;
     gpu.queue.writeBuffer(pointLightBuffer, 0, pointLightData);
+
+    // Обновляем прожектор
+    updateSpotLight(lightControls, spotLight, spotLightData);
+    gpu.queue.writeBuffer(spotLightBuffer, 0, spotLightData);
 
     gpu.queue.writeBuffer(ubo, 0, uniformData);
 
