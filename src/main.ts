@@ -1,35 +1,3 @@
-/**
- * ============================================================================
- * MAIN.TS - Главный файл приложения WebGPU с Shadow Mapping
- * ============================================================================
- *
- * Этот файл содержит:
- * 1) Инициализацию WebGPU
- * 2) Создание ресурсов (текстуры, буферы, pipelines)
- * 3) Render loop с двумя проходами:
- *    - Shadow Pass: рендеринг в shadow map
- *    - Main Pass: обычный рендеринг с тенями
- *
- * АРХИТЕКТУРА SHADOW MAPPING:
- *
- *   ┌─────────────────┐
- *   │   Shadow Pass   │  ← Рендерим сцену "глазами света"
- *   │  (depth only)   │     Записываем глубину в shadow map
- *   └────────┬────────┘
- *            │
- *            ▼
- *   ┌─────────────────┐
- *   │   Shadow Map    │  ← 2D текстура с глубиной
- *   │ (depth texture) │     Формат: depth32float
- *   └────────┬────────┘
- *            │
- *            ▼
- *   ┌─────────────────┐
- *   │   Main Pass     │  ← Обычный рендеринг
- *   │  (with shadows) │     Сравниваем глубину с shadow map
- *   └─────────────────┘
- */
-
 import { CameraController, directionFromAngles } from "./camera";
 import { hexToRgb01 } from "./color";
 import { createCube, createPlane, createSphere } from "./geometry";
@@ -509,7 +477,7 @@ async function main() {
     },
   });
 
-  // Pipeline для окружения (пол и стены)
+  // Pipeline для пола
   const envPipeline = await gpu.createRenderPipelineAsync({
     layout: envPipelineLayout,
     vertex: {
@@ -717,15 +685,11 @@ async function main() {
       math.multiply(rotationMat, scaleMat),
     );
 
-    // biome-ignore format: ignore
     // Матрица модели для пола (лежит под кубом)
-    // Куб с центром на y=0.5 имеет нижнюю грань на y=0, поэтому пол на y=0
-    const floorModel: math.Mat4 = new Float32Array([
-      1, 0, 0, 0,
-      0, 1, 0, 0,
-      0, 0, 1, 0,
-      0, -1, 2, 1,
-    ]);
+    const floorModel: math.Mat4 = math.multiply(
+      math.identity(),
+      math.translation({ x: 0, y: -1, z: 2 }),
+    );
 
     const proj = math.projection(70, canvas.width / canvas.height, 0.01, 100);
     const view = math.lookAt(camera.state.position, math.add(camera.state.position, forward), {
